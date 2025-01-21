@@ -378,7 +378,13 @@ async def xero_call_endpoint(endpoint: str, params: dict = {}) -> str:
 
 def _get_endpoint_details(func, model_finder):
     doc = func.__doc__
-    return_type_list = return_type = func.__doc__.split(":return: ")[1].strip()
+    if doc is None or doc.strip() == "":
+        return "No documentation available", "Unknown", ""
+    
+    if ":return: " not in doc:
+        return doc, "Unknown", ""
+
+    return_type_list = return_type = doc.split(":return: ")[1].strip()
     return_type_single = return_type_list[:-1]  # remove the last s character
     # Get the model class if it exists
     try:
