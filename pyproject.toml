@@ -1,0 +1,26 @@
+[project]
+name = "xero-mcp"
+version = "0.1.0"
+description = "Xero MCP Server"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.11.11",
+    "fastmcp>=0.4.1",
+    "python-dotenv>=1.0.1",
+    "appdirs>=1.4.4",
+    "xero-python>=1.25.0",
+    "authlib>=1.3.0",
+    "requests>=2.32.3",
+]
+
+[tool.fastmcp]
+dependencies = [
+    "aiohttp",
+    "httpx",
+    "python-dotenv",
+    "pydantic",
+    "appdirs",
+    "xero-python",
+    "authlib"
+]
