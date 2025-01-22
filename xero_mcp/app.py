@@ -27,9 +27,6 @@ from authlib.integrations.requests_client import OAuth2Session
 AUTHORIZATION_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
 
-# Load environment variables from .env file
-load_dotenv()
-
 # Setup config directory
 CONFIG_DIR = Path(__file__).parent / "config"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
