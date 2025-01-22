@@ -34,7 +34,7 @@ else:
     CONFIG_DIR = Path(__file__).parent / "config"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-
+load_dotenv()
 # Models for type safety and validation
 class XeroAuth(BaseModel):
     client_id: str
@@ -84,7 +84,7 @@ class AuthServer:
         self.site: Optional[web.TCPSite] = None
         
         # Read the HTML template
-        template_path = Path(__file__).parent / "auth_success.html"
+        template_path = Path(__file__).parent.parent / "auth_success.html"
         try:
             self.success_template = template_path.read_text()
         except Exception as e:
