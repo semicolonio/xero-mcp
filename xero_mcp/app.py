@@ -82,6 +82,20 @@ class AuthServer:
         self.state = secrets.token_urlsafe(32)
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
+        
+        # Read the HTML template
+        template_path = Path(__file__).parent / "auth_success.html"
+        try:
+            self.success_template = template_path.read_text()
+        except Exception as e:
+            logger.error(f"Failed to read auth success template: {e}")
+            self.success_template = """
+                <html><body>
+                    <h1>Authentication Successful!</h1>
+                    <p>You can close this window now.</p>
+                    <script>window.close()</script>
+                </body></html>
+            """
 
     async def handle_callback(self, request: web.Request) -> web.Response:
         """Handle OAuth callback"""
@@ -97,18 +111,9 @@ class AuthServer:
 
             await self.xero_client.exchange_code(code)
 
-            # Set result and close browser window
-            html = """
-                <html>
-                    <body>
-                        <h1>Authentication Successful!</h1>
-                        <p>You can close this window now.</p>
-                        <script>window.close()</script>
-                    </body>
-                </html>
-            """
+            # Return the HTML template
             self.auth_future.set_result(True)
-            return web.Response(text=html, content_type="text/html")
+            return web.Response(text=self.success_template, content_type="text/html")
 
         except Exception as e:
             self.auth_future.set_exception(e)
