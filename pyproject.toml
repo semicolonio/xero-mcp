@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-xero-mcp = "xero_app:mcp.run"
+xero-mcp = "xero_mcp:mcp.run"
 
 [tool.fastmcp]
 dependencies = [
