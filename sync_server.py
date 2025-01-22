@@ -361,145 +361,56 @@ def xero_get_auth_status() -> str:
         return "Token expired"
     return f"Authenticated (token expires in {int(expires_in)} seconds)"
 
+# Core sync tools
 @mcp.tool()
-async def xero_call_endpoint(endpoint: str, params: dict = {}) -> str:
-    """Call a specific Xero API endpoint to interact with Xero's accounting data. Common endpoints include get_accounts, get_contacts, get_bank_transactions, get_payments, etc. To see all available endpoints, use xero_get_existing_endpoints(). If you need details about a specific endpoint's parameters, return types and field definitions, call xero_get_endpoint_docs() with the endpoint name. Each endpoint may require different parameters - if you're unsure about what parameters are needed, check the endpoint documentation first."""
-    api_client = await xero.ensure_client()
-    accounting_api = AccountingApi(api_client)
-    tenant_id = await xero.get_tenant_id()
-    func = getattr(accounting_api, endpoint)
-    if not func:
-        return f"Endpoint {endpoint} not found"
-    response = func(tenant_id, **params)
-    if not response:
-        return f"No data returned from endpoint {endpoint}"
-    objects = getattr(response, endpoint.replace("get_", ""))
-    return objects
-
-def _get_endpoint_details(func, model_finder):
-    doc = func.__doc__
-    if doc is None or doc.strip() == "":
-        return "No documentation available", "Unknown", ""
+async def xero_data_sync(days_back: int = 30, ctx: Context = None) -> str:
+    """Sync recent Xero data to local SQLite database with progress tracking"""
+    if not xero.token:
+        return "Please authenticate with Xero first using get_auth_url()"
+        
+    stats = SyncStats(start_time=datetime.utcnow())
     
-    if ":return: " not in doc:
-        return doc, "Unknown", ""
-
-    return_type_list = return_type = doc.split(":return: ")[1].strip()
-    return_type_single = return_type_list[:-1]  # remove the last s character
-    # Get the model class if it exists
     try:
-        model_class_list = model_finder.find_model(return_type_list)
-        model_class_single = model_finder.find_model(return_type_single)
+        # Initialize database
+        conn = get_db_connection()
+        ensure_tables_exist(conn)
         
-        # Get fields from model
-        if hasattr(model_class_list, "openapi_types"):
-            fields = model_class_list.openapi_types
-            field_info = "\n    Returned Object Fields:\n"
-            for field, type_info in fields.items():
-                field_info += f"      - {field}: {type_info}\n"
-            
-            if hasattr(model_class_single, "openapi_types"):
-                fields = model_class_single.openapi_types
-                field_info += f"\n    {return_type_single} Fields:\n"
-                for field, type_info in fields.items():
-                    field_info += f"      - {field}: {type_info}\n"
-        else:
-            field_info = "\n    Fields: Not available"
-    except (ImportError, AttributeError):
-        field_info = "\n    Fields: Not available"
-    except (TypeError, AttributeError):
-        return_type = "Unknown"
-        field_info = ""
+        # Get tenant ID
+        tenant_id = await xero.get_tenant_id()
+        
+        # Sync core data types using optimal patterns
+        await sync_accounts(conn, tenant_id, ctx, stats)
+        await sync_contacts(conn, tenant_id, ctx, stats) 
+        await sync_bank_transactions(conn, tenant_id, days_back, ctx, stats)
+        await sync_payments(conn, tenant_id, days_back, ctx, stats)
+        
+        stats.end_time = datetime.utcnow()
+        save_sync_stats(stats)
+        
+        return f"Sync completed successfully in {(stats.end_time - stats.start_time).seconds} seconds"
+        
+    except Exception as e:
+        stats.errors.append(str(e))
+        stats.end_time = datetime.utcnow()
+        save_sync_stats(stats)
+        raise
 
-    return doc, return_type, field_info
+@mcp.resource("xero://data/schema")
+def xero_data_schema() -> str:
+    """Provide the Xero data schema as context"""
+    conn = get_db_connection()
+    schema = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table'"
+    ).fetchall()
+    return "\n".join(sql[0] for sql in schema if sql[0])
 
 @mcp.tool()
-async def xero_get_existing_endpoints() -> str:
-    """List existing Xero API endpoints with their return types and fields"""
-    api_client = await xero.ensure_client()
-    accounting_api = AccountingApi(api_client)
-    
-    # Get all get_ methods
-    endpoints = [name for name in dir(accounting_api) if name.startswith("get_")]
-    model_finder = accounting_api.get_model_finder()
-    result = []
-    for endpoint in endpoints:
-        func = getattr(accounting_api, endpoint)
-        doc, return_type, field_info = _get_endpoint_details(func, model_finder)
-        result.append(f"{endpoint} -> {return_type}{field_info}")
-
-    return "\n".join(result)
-
-@mcp.tool()
-async def xero_get_endpoint_docs(endpoint: str) -> str:
-    """Provide documentation for a specific Xero API endpoint"""
-    api_client = await xero.ensure_client()
-    accounting_api = AccountingApi(api_client)
-    func = getattr(accounting_api, endpoint)
-    model_finder = accounting_api.get_model_finder()
-    doc, return_type, field_info = _get_endpoint_details(func, model_finder)
-    return f"Function: {endpoint}\nReturn Type: {return_type}\n{field_info}\n\nDocs:\n{doc}"
-
-@mcp.tool()
-async def xero_get_model_fields(model: str) -> str:
-    """Provide fields for a specific Xero API model"""
-    api_client = await xero.ensure_client()
-    accounting_api = AccountingApi(api_client)
-    model_finder = accounting_api.get_model_finder()
-    model_class = model_finder.find_model(model)
-    return model_class.openapi_types
-
-
-# # Core sync tools
-# @mcp.tool()
-# async def xero_data_sync(days_back: int = 30, ctx: Context = None) -> str:
-#     """Sync recent Xero data to local SQLite database with progress tracking"""
-#     if not xero.token:
-#         return "Please authenticate with Xero first using get_auth_url()"
-        
-#     stats = SyncStats(start_time=datetime.utcnow())
-    
-#     try:
-#         # Initialize database
-#         conn = get_db_connection()
-#         ensure_tables_exist(conn)
-        
-#         # Get tenant ID
-#         tenant_id = await xero.get_tenant_id()
-        
-#         # Sync core data types using optimal patterns
-#         await sync_accounts(conn, tenant_id, ctx, stats)
-#         await sync_contacts(conn, tenant_id, ctx, stats) 
-#         await sync_bank_transactions(conn, tenant_id, days_back, ctx, stats)
-#         await sync_payments(conn, tenant_id, days_back, ctx, stats)
-        
-#         stats.end_time = datetime.utcnow()
-#         save_sync_stats(stats)
-        
-#         return f"Sync completed successfully in {(stats.end_time - stats.start_time).seconds} seconds"
-        
-#     except Exception as e:
-#         stats.errors.append(str(e))
-#         stats.end_time = datetime.utcnow()
-#         save_sync_stats(stats)
-#         raise
-
-# @mcp.resource("xero://data/schema")
-# def xero_data_schema() -> str:
-#     """Provide the Xero data schema as context"""
-#     conn = get_db_connection()
-#     schema = conn.execute(
-#         "SELECT sql FROM sqlite_master WHERE type='table'"
-#     ).fetchall()
-#     return "\n".join(sql[0] for sql in schema if sql[0])
-
-# @mcp.tool()
-# def xero_data_query(query: str) -> str:
-#     """Query Xero data using SQL"""
-#     conn = get_db_connection()
-#     cur = conn.cursor()
-#     cur.execute(query)
-#     return cur.fetchall()
+def xero_data_query(query: str) -> str:
+    """Query Xero data using SQL"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(query)
+    return cur.fetchall()
 
 
 async def sync_accounts(conn: sqlite3.Connection, tenant_id: str, ctx: Context, stats: SyncStats):
