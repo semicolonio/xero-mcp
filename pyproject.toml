@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = {include = ["xero_mcp*"]}
+packages = ["xero_mcp"]
 
 [project.scripts]
 xero-mcp = "xero_mcp:mcp.run"
