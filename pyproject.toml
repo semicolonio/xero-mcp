@@ -13,8 +13,8 @@ dependencies = [
     "requests>=2.32.3",
 ]
 
-[tool.uv]
-package = true
+[tool.setuptools]
+packages = {include = ["xero_mcp*"]}
 
 [project.scripts]
 xero-mcp = "xero_mcp:mcp.run"
