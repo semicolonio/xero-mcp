@@ -28,7 +28,10 @@ AUTHORIZATION_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
 
 # Setup config directory
-CONFIG_DIR = Path(__file__).parent / "config"
+if os.getenv("CONFIG_DIR"):
+    CONFIG_DIR = Path(os.getenv("CONFIG_DIR"))
+else:
+    CONFIG_DIR = Path(__file__).parent / "config"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
