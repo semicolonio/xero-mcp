@@ -35,6 +35,8 @@ else:
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 load_dotenv()
+
+
 # Models for type safety and validation
 class XeroAuth(BaseModel):
     client_id: str
@@ -82,7 +84,7 @@ class AuthServer:
         self.state = secrets.token_urlsafe(32)
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
-        
+
         # Read the HTML template
         template_path = Path(__file__).parent.parent / "auth_success.html"
         try:
@@ -479,23 +481,7 @@ async def xero_get_contacts(
     include_archived: bool = False,
     summary_only: bool = False,
 ) -> str:
-    """Get contacts from Xero's accounting system
-
-    Parameters:
-        where: Filter using optimized fields only. Examples:
-            'Name="ABC Limited"'
-            'EmailAddress="email@example.com"'
-            'AccountNumber="ABC-100"'
-        page: Page number for paginated results (100 contacts per page)
-        search_term: Text search across Name, FirstName, LastName, ContactNumber,
-                    CompanyNumber, EmailAddress
-        contact_ids: Comma-separated list of ContactIDs to retrieve
-        include_archived: Include archived contacts in response
-        summary_only: Return lightweight response excluding heavy computation fields
-
-    Returns:
-        str: JSON string containing list of contacts with their details
-    """
+    """ """
     params = {}
     if where:
         params["where"] = where
@@ -512,20 +498,28 @@ async def xero_get_contacts(
 
     return await xero_call_endpoint("get_contacts", params=params)
 
+
 @mcp.tool(
-    description="""Tool to retrieve a Balance Sheet report from Xero.
-    Use this tool to get a Balance Sheet report showing:
-    - Assets
-    - Liabilities 
+    description="""Retrieves a Balance Sheet report from Xero for a specified date.
+
+    The Balance Sheet shows the financial position at the end of the specified month, including:
+    - Assets (Bank accounts, Current assets, Fixed assets etc)
+    - Liabilities (Current liabilities, Non-current liabilities etc) 
     - Equity
     
-    Parameters allow you to:
-    - Specify report date
-    - Compare multiple periods
-    - Filter by tracking categories
-    - Choose between standard and custom layouts
-    - Get cash basis reporting
-    
+    It also compares values to the same month in the previous year.
+
+    Required parameters:
+    - date: Report date in YYYY-MM-DD format (e.g. 2024-01-31)
+
+    Optional parameters:
+    - periods: Number of periods to compare (1-11)
+    - timeframe: Period size to compare (MONTH, QUARTER, YEAR)
+    - tracking_option_id_1: Filter by first tracking category option
+    - tracking_option_id_2: Filter by second tracking category option  
+    - standard_layout: Set true to ignore custom report layouts
+    - payments_only: Set true to show only cash transactions
+
     Returns a JSON string containing the Balance Sheet report data."""
 )
 async def xero_get_balance_sheet(
@@ -537,26 +531,12 @@ async def xero_get_balance_sheet(
     standard_layout: bool = True,
     payments_only: bool = False,
 ) -> str:
-    """Get Balance Sheet report from Xero
-    
-    Parameters:
-        date: The date of the Balance Sheet report (YYYY-MM-DD)
-        periods: Number of periods to compare
-        timeframe: Period size to compare (MONTH, QUARTER, YEAR)
-        tracking_option_id_1: First tracking category ID to filter by
-        tracking_option_id_2: Second tracking category ID to filter by
-        standard_layout: Use standard layout (True) or custom layout (False)
-        payments_only: Return cash basis Balance Sheet (True) or accrual basis (False)
-    
-    Returns:
-        str: JSON string containing Balance Sheet report data
-    """
     params = {
         "date": date,
         "standard_layout": str(standard_layout).lower(),
-        "payments_only": str(payments_only).lower()
+        "payments_only": str(payments_only).lower(),
     }
-    
+
     if periods:
         params["periods"] = periods
     if timeframe:
@@ -569,20 +549,32 @@ async def xero_get_balance_sheet(
     response = await xero_call_endpoint("get_report_balance_sheet", params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
+
 @mcp.tool(
-    description="""Tool to retrieve a Profit and Loss report from Xero.
-    Use this tool to get a Profit and Loss report showing:
-    - Revenue
-    - Expenses
-    - Net Profit/Loss
-    
-    Parameters allow you to:
-    - Specify date range
-    - Compare multiple periods
-    - Filter by tracking categories
-    - Choose between standard and custom layouts
-    - Get cash basis reporting
-    
+    description="""Retrieves a Profit and Loss report from Xero for a specified date range.
+
+    The Profit and Loss report shows the financial performance over the specified period, including:
+    - Income
+    - Expenses 
+    - Net profit/loss
+
+    Required parameters:
+    - from_date: Start date in YYYY-MM-DD format (e.g. 2024-01-01)
+    - to_date: End date in YYYY-MM-DD format (e.g. 2024-01-31)
+
+    Optional parameters:
+    - periods: Number of periods to compare (1-11)
+    - timeframe: Period size to compare (MONTH, QUARTER, YEAR)
+    - tracking_category_id: Filter by first tracking category, shows figures for each option
+    - tracking_category_id_2: Filter by second tracking category, shows figures for each option combination
+    - tracking_option_id: When used with tracking_category_id, shows figures for just one option
+    - tracking_option_id_2: When used with tracking_category_id_2, shows figures for just one option
+    - standard_layout: Set true to ignore custom report layouts
+    - payments_only: Set true to show only cash transactions
+
+    Note: When using periods with from_date/to_date, the date range applies to each period.
+    For consistent month data across periods, start in a 31-day month.
+
     Returns a JSON string containing the Profit and Loss report data."""
 )
 async def xero_get_profit_and_loss(
@@ -597,30 +589,13 @@ async def xero_get_profit_and_loss(
     standard_layout: bool = True,
     payments_only: bool = False,
 ) -> str:
-    """Get Profit and Loss report from Xero
-    
-    Parameters:
-        from_date: Start date of the report (YYYY-MM-DD)
-        to_date: End date of the report (YYYY-MM-DD)
-        periods: Number of periods to compare (1-12)
-        timeframe: Period size to compare (MONTH, QUARTER, YEAR)
-        tracking_category_id: First tracking category ID to filter by
-        tracking_category_id_2: Second tracking category ID to filter by
-        tracking_option_id: First tracking option ID to filter by
-        tracking_option_id_2: Second tracking option ID to filter by
-        standard_layout: Use standard layout (True) or custom layout (False)
-        payments_only: Return cash basis P&L (True) or accrual basis (False)
-    
-    Returns:
-        str: JSON string containing Profit and Loss report data
-    """
     params = {
         "from_date": from_date,
         "to_date": to_date,
         "standard_layout": str(standard_layout).lower(),
-        "payments_only": str(payments_only).lower()
+        "payments_only": str(payments_only).lower(),
     }
-    
+
     if periods:
         params["periods"] = periods
     if timeframe:
@@ -638,235 +613,329 @@ async def xero_get_profit_and_loss(
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
-# @mcp.tool(
-#     description="""Tool to retrieve all bank transactions from Xero.
-#     Use this tool to get details about bank transactions including:
-#     - Deposits
-#     - Withdrawals
-#     - Bank transfers
-#     - Reconciled and unreconciled transactions
-#     Each transaction contains:
-#     - Date
-#     - Amount
-#     - Reference
-#     - Account details
-#     - Contact information
-#     - Reconciliation status
-#     This is useful when you need to:
-#     - Review banking activity
-#     - Check transaction details
-#     - Verify reconciliation status
-#     - Track money movement between accounts
-#     Returns a JSON string containing the bank transactions list."""
-# )
-# async def xero_get_bank_transactions(where: str) -> str:
-#     """Get all bank transactions from Xero
+@mcp.tool(
+    description="""Tool to retrieve an Aged Payables by Contact report from Xero.
+    Returns aged payables report details including:
+    - Date
+    - Reference
+    - Due Date
+    - Total Amount
+    - Amount Paid
+    - Amount Credited 
+    - Amount Due
+    - Aging periods (current, overdue)
+    
+    Parameters:
+        contactID: Required - Contact ID to get aged payables for
+        date: Optional - Show payments up to this date (defaults to end of current month)
+        fromDate: Optional - Show payable invoices from this date
+        toDate: Optional - Show payable invoices to this date
+    
+    Returns:
+        str: JSON string containing aged payables report with payment details
+    """
+)
+async def xero_get_aged_payables_by_contact(
+    contact_id: str,
+    date: str = None,
+    from_date: str = None,
+    to_date: str = None,
+) -> str:
+    params = {"contact_id": contact_id}
 
-#     Parameters:
-#         where: A string of filters to apply to the bank transactions.
-#             Example1: 'BankAccountID = "1234567890"'
-#             Example2: 'BankAccountID = "1234567890" AND TransactionDate = "2024-01-01"'
-#             Example3: 'BankAccountID = "1234567890" AND TransactionDate = "2024-01-01" AND Amount = 1000'
-#             Example4: 'TransactionDate >= "2024-01-01" AND TransactionDate <= "2024-01-31"'
+    if date:
+        params["date"] = date
+    if from_date:
+        params["from_date"] = from_date
+    if to_date:
+        params["to_date"] = to_date
 
-#     Returns:
-#         str: JSON string containing list of bank transactions with their details
-#     """
-#     return await xero_call_endpoint("get_bank_transactions", params={"where": where})
-
-# @mcp.tool(
-#     description="""Tool to retrieve all payment records from Xero.
-#     Use this tool to get details about payments including:
-#     - Invoice payments
-#     - Bill payments
-#     - Prepayments
-#     - Overpayments
-#     Each payment record contains:
-#     - Date
-#     - Amount
-#     - Payment type (cash, credit card, bank transfer etc)
-#     - Account paid from/to
-#     - Invoice/bill reference
-#     - Status
-#     This is useful when you need to:
-#     - Track payment history
-#     - Verify payment details
-#     - Check payment methods used
-#     - Review payment allocations
-#     Returns a JSON string containing the payments list."""
-# )
-# async def xero_get_payments(where: str) -> str:
-#     """Get all payments from Xero
-
-#     Parameters:
-#         where: A string of filters to apply to the payments.
-#             Example1: 'Date = "2024-01-01"'
-#             Example2: 'Date = "2024-01-01" AND ContactID = "1234567890"'
-#             Example3: 'Date = "2024-01-01" AND ContactID = "1234567890" AND Amount = 1000'
-#             Example4: 'Date >= "2024-01-01" AND Date <= "2024-01-31"'
-
-#     Returns:
-#         str: JSON string containing list of payments with their details
-#     """
-#     return await xero_call_endpoint("get_payments", params={"where": where})
+    response = await xero_call_endpoint(
+        "get_report_aged_payables_by_contact", params=params
+    )
+    return json.dumps(serialize_list(response.reports), indent=2)
 
 
-def _get_endpoint_details(func, model_finder):
-    doc = func.__doc__
-    if doc is None or doc.strip() == "":
-        return "No documentation available", "Unknown", ""
+@mcp.tool(
+    description="""Tool to retrieve an Aged Receivables by Contact report from Xero.
+    Returns aged receivables report details including:
+    - Date
+    - Reference
+    - Due Date
+    - Total Amount
+    - Amount Paid
+    - Amount Credited 
+    - Amount Due
+    - Aging periods (current, overdue)
+    
+    Parameters:
+        contactID: Required - Contact ID to get aged receivables for
+        date: Optional - Show payments up to this date (defaults to end of current month)
+        fromDate: Optional - Show receivable invoices from this date
+        toDate: Optional - Show receivable invoices to this date
+    
+    Returns:
+        str: JSON string containing aged receivables report with payment details
+    """
+)
+async def xero_get_aged_receivables_by_contact(
+    contact_id: str,
+    date: str = None,
+    from_date: str = None,
+    to_date: str = None,
+) -> str:
+    params = {"contact_id": contact_id}
 
-    if ":return: " not in doc:
-        return doc, "Unknown", ""
+    if date:
+        params["date"] = date
+    if from_date:
+        params["from_date"] = from_date
+    if to_date:
+        params["to_date"] = to_date
 
-    return_type_list = return_type = doc.split(":return: ")[1].strip()
-    return_type_single = return_type_list[:-1]  # remove the last s character
-    # Get the model class if it exists
-    try:
-        model_class_list = model_finder.find_model(return_type_list)
-        model_class_single = model_finder.find_model(return_type_single)
-
-        # Get fields from model
-        if hasattr(model_class_list, "openapi_types"):
-            fields = model_class_list.openapi_types
-            field_info = "\n    Returned Object Fields:\n"
-            for field, type_info in fields.items():
-                field_info += f"      - {field}: {type_info}\n"
-
-            if hasattr(model_class_single, "openapi_types"):
-                fields = model_class_single.openapi_types
-                field_info += f"\n    {return_type_single} Fields:\n"
-                for field, type_info in fields.items():
-                    field_info += f"      - {field}: {type_info}\n"
-        else:
-            field_info = "\n    Fields: Not available"
-    except (ImportError, AttributeError):
-        field_info = "\n    Fields: Not available"
-    except (TypeError, AttributeError):
-        return_type = "Unknown"
-        field_info = ""
-
-    return doc, return_type, field_info
+    response = await xero_call_endpoint(
+        "get_report_aged_receivables_by_contact", params=params
+    )
+    return json.dumps(serialize_list(response.reports), indent=2)
 
 
-# @mcp.tool(
-#     description="""Tool to get a comprehensive list of available Xero API endpoints with their return types and field definitions.
-#     Use this tool when you need to:
-#     - Discover available Xero API endpoints
-#     - Understand what data each endpoint returns
-#     - View the structure and fields of returned objects
-#     - Plan which endpoints to use for specific data needs
-#     Returns a formatted string containing endpoint details including:
-#     - Endpoint name
-#     - Return type
-#     - Available fields and their data types
-#     - Brief description of functionality"""
-# )
-# async def xero_get_existing_endpoints() -> str:
-#     """List all available Xero API endpoints with their return types and fields
+@mcp.tool(
+    description="""Tool to retrieve a Bank Summary report from Xero.
+    Returns bank account balances and cash movements including:
+    - Opening balance for each bank account
+    - Cash received
+    - Cash spent
+    - Closing balance
+    - Net cash movement
+    
+    Optional parameters:
+        from_date: Start date for the report (e.g. 2024-01-01)
+        to_date: End date for the report (e.g. 2024-01-31)
+    
+    Returns:
+        str: JSON string containing bank summary report with balances and cash movements
+    """
+)
+async def xero_get_bank_summary(
+    from_date: str = None,
+    to_date: str = None,
+) -> str:
+    params = {}
 
-#     Parameters:
-#         No parameters required. This tool lists all available endpoints.
+    if from_date:
+        params["from_date"] = from_date
+    if to_date:
+        params["to_date"] = to_date
 
-#     Returns:
-#         str: Formatted string containing endpoint details, return types, and field definitions
-#     """
-#     api_client = await xero.ensure_client()
-#     accounting_api = AccountingApi(api_client)
+    response = await xero_call_endpoint("get_report_bank_summary", params=params)
+    return json.dumps(serialize_list(response.reports), indent=2)
 
-#     endpoints = ["get_accounts", "get_contacts", "get_bank_transactions", "get_payments", "get_invoices"]
 
-#     model_finder = accounting_api.get_model_finder()
-#     result = []
-#     for endpoint in endpoints:
-#         func = getattr(accounting_api, endpoint)
-#         doc, return_type, field_info = _get_endpoint_details(func, model_finder)
-#         result.append(f"{endpoint} -> {return_type}{field_info}")
+@mcp.tool(
+    description="""Tool to retrieve a Budget Summary report from Xero.
+    Returns a summary of monthly budget including:
+    - Monthly budget figures
+    - Actual vs budget comparisons
+    - Budget variances
+    
+    Optional parameters:
+        date: Report date (e.g. 2024-01-31)
+        periods: Number of periods to compare (integer between 1 and 12)
+        timeframe: Period size to compare (1=month, 3=quarter, 12=year)
+    
+    Returns:
+        str: JSON string containing budget summary report with monthly totals and comparisons
+    """
+)
+async def xero_get_budget_summary(
+    date: str = None,
+    periods: int = None,
+    timeframe: int = None,
+) -> str:
+    params = {}
 
-#     return "\n".join(result)
+    if date:
+        params["date"] = date
+    if periods:
+        params["periods"] = periods
+    if timeframe:
+        params["timeframe"] = timeframe
 
-# @mcp.tool(
-#     description="""Tool to get detailed documentation for a specific Xero API endpoint.
-#     Use this tool when you need to:
-#     - Understand exactly how an endpoint works
-#     - View all available parameters and options
-#     - See the complete data structure returned
-#     - Check field definitions and data types
-#     - Verify endpoint requirements and constraints
+    response = await xero_call_endpoint("get_report_budget_summary", params=params)
+    return json.dumps(serialize_list(response.reports), indent=2)
 
-#     Parameters:
-#     - endpoint: The name of the endpoint to get documentation for (e.g. "get_accounts")
 
-#     Returns a formatted string containing:
-#     - Full endpoint documentation
-#     - Return type details
-#     - Complete field listing with types
-#     - Usage examples if available"""
-# )
-# async def xero_get_endpoint_docs(endpoint: str, ctx: Context) -> str:
-#     """Get detailed documentation for a specific Xero API endpoint
+@mcp.tool(
+    description="""Tool to retrieve an Executive Summary report from Xero.
+    Returns a business performance summary including:
+    - Monthly totals
+    - Common business ratios
+    - Key performance indicators
+    - Cash position
+    - Profitability metrics
+    
+    Optional parameters:
+        date: Report date (e.g. 2024-01-31)
+    
+    Returns:
+        str: JSON string containing executive summary report with business performance metrics
+    """
+)
+async def xero_get_executive_summary(
+    date: str = None,
+) -> str:
+    params = {}
 
-#     Parameters:
-#         endpoint (str): Name of the endpoint to get documentation for.
-#             Must be a valid endpoint name like:
-#             - get_accounts
-#             - get_contacts
-#             - get_bank_transactions
-#             - get_payments
-#             - get_invoices
+    if date:
+        params["date"] = date
 
-#     Returns:
-#         str: Formatted string containing full endpoint documentation, return types, and field definitions
+    response = await xero_call_endpoint("get_report_executive_summary", params=params)
+    return json.dumps(serialize_list(response.reports), indent=2)
 
-#     Raises:
-#         AttributeError: If the endpoint name is not valid
-#     """
-#     ctx.info(f"Getting documentation for endpoint: {endpoint}")
-#     api_client = await xero.ensure_client()
-#     accounting_api = AccountingApi(api_client)
-#     func = getattr(accounting_api, endpoint)
-#     model_finder = accounting_api.get_model_finder()
-#     doc, return_type, field_info = _get_endpoint_details(func, model_finder)
-#     return f"Function: {endpoint}\nReturn Type: {return_type}\n{field_info}\n\nDocs:\n{doc}"
 
-# @mcp.tool(
-#     description="""Tool to get detailed field definitions for a specific Xero API model.
-#     Use this tool when you need to:
-#     - View all available fields in a model
-#     - Check field data types and constraints
-#     - Understand model structure
-#     - Verify required vs optional fields
+@mcp.tool(
+    description="""Tool to retrieve bank transactions from Xero.
+    Returns bank transaction details including:
+    - Type (SPEND/RECEIVE/SPEND-PREPAYMENT/RECEIVE-PREPAYMENT/SPEND-OVERPAYMENT/RECEIVE-OVERPAYMENT)
+    - Contact details
+    - Line items
+    - Bank account details
+    - Date, reference, currency
+    - Status and reconciliation state
+    - Amounts (subtotal, tax, total)
+    
+    Optional parameters:
+        where: Filter by any element (e.g. Type=="SPEND", Status=="AUTHORISED")
+        order: Order by any element
+        page: Page number for pagination (up to 100 transactions per page)
+        modified_after: Only return transactions created/modified after this timestamp
+    
+    Returns:
+        str: JSON string containing bank transactions data
+    """
+)
+async def xero_get_bank_transactions(
+    where: str = None,
+    order: str = None,
+    page: int = None,
+    modified_after: str = None,
+) -> str:
+    params = {}
 
-#     Parameters:
-#     - model: The name of the model to get fields for (e.g. "Account", "Contact")
+    if where:
+        params["where"] = where
+    if order:
+        params["order"] = order
+    if page:
+        params["page"] = page
+    if modified_after:
+        params["modified_after"] = modified_after
 
-#     Returns a dictionary mapping field names to their OpenAPI type definitions."""
-# )
-# async def xero_get_model_fields(model: str, ctx: Context) -> str:
-#     """Get detailed field definitions for a specific Xero API model
+    response = await xero_call_endpoint("get_bank_transactions", params=params)
+    return json.dumps(serialize_list(response.bank_transactions), indent=2)
 
-#     Parameters:
-#         model (str): Name of the model to get field definitions for.
-#             Must be a valid model name like:
-#             - Account
-#             - Contact
-#             - BankTransaction
-#             - Payment
-#             - Invoice
 
-#     Returns:
-#         str: Dictionary mapping field names to their OpenAPI type definitions
+@mcp.tool(
+    description="""Tool to retrieve payments from Xero.
+    Returns payment details including:
+    - Date and amount
+    - Payment type and status
+    - Reference
+    - Bank account details
+    - Invoice/credit note details
+    - Reconciliation status
+    
+    Optional parameters:
+        where: Filter by any element (e.g. Status=="AUTHORISED")
+        order: Order by any element
+        page: Page number for pagination (up to 100 payments per page)
+        modified_after: Only return payments created/modified after this timestamp
+    
+    Returns:
+        str: JSON string containing payments data
+    """
+)
+async def xero_get_payments(
+    where: str = None,
+    order: str = None,
+    page: int = None,
+    modified_after: str = None,
+) -> str:
+    params = {}
 
-#     Raises:
-#         ImportError: If the model name is not valid
-#         AttributeError: If the model does not have OpenAPI type definitions
-#     """
-#     ctx.info(f"Getting fields for model: {model}")
-#     api_client = await xero.ensure_client()
-#     accounting_api = AccountingApi(api_client)
-#     model_finder = accounting_api.get_model_finder()
-#     model_class = model_finder.find_model(model)
-#     return json.dumps(model_class.openapi_types, indent=2)
+    if where:
+        params["where"] = where
+    if order:
+        params["order"] = order
+    if page:
+        params["page"] = page
+    if modified_after:
+        params["modified_after"] = modified_after
+
+    response = await xero_call_endpoint("get_payments", params=params)
+    return json.dumps(serialize_list(response.payments), indent=2)
+
+
+@mcp.tool(
+    description="""Tool to retrieve invoices from Xero.
+    Returns invoice details including:
+    - Type (ACCREC/ACCPAY)
+    - Contact details
+    - Line items with descriptions, quantities, amounts
+    - Dates (invoice date, due date)
+    - Status and amounts (due, paid, credited)
+    - Currency and tax details
+    
+    Optional parameters:
+        where: Filter by any element (e.g. Status=="AUTHORISED", Type=="ACCREC")
+        order: Order by any element (optimized for: InvoiceId, UpdatedDateUTC, Date)
+        page: Page number for pagination (up to 100 invoices per page)
+        modified_after: Only return invoices created/modified after this timestamp
+        ids: Filter by comma-separated list of invoice IDs
+        invoice_numbers: Filter by comma-separated list of invoice numbers
+        contact_ids: Filter by comma-separated list of contact IDs
+        statuses: Filter by comma-separated list of statuses
+        summary_only: Return lightweight response without payments, attachments, line items
+    
+    Returns:
+        str: JSON string containing invoices data
+    """
+)
+async def xero_get_invoices(
+    where: str = None,
+    order: str = None,
+    page: int = None,
+    modified_after: str = None,
+    ids: str = None,
+    invoice_numbers: str = None,
+    contact_ids: str = None,
+    statuses: str = None,
+    summary_only: bool = False,
+) -> str:
+    params = {}
+    
+    if where:
+        params["where"] = where
+    if order:
+        params["order"] = order
+    if page:
+        params["page"] = page
+    if modified_after:
+        params["modified_after"] = modified_after
+    if ids:
+        params["ids"] = ids
+    if invoice_numbers:
+        params["invoice_numbers"] = invoice_numbers
+    if contact_ids:
+        params["contact_ids"] = contact_ids
+    if statuses:
+        params["statuses"] = statuses
+    if summary_only:
+        params["summary_only"] = summary_only
+
+    response = await xero_call_endpoint("get_invoices", params=params)
+    return json.dumps(serialize_list(response.invoices), indent=2)
+
 
 
 # Helper functions
