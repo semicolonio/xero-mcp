@@ -121,19 +121,32 @@ class AuthServer:
             self.auth_future.set_exception(e)
             return web.Response(text=str(e), status=500)
 
-    async def start(self, port: int = 8000) -> None:
-        """Start local auth server"""
+    async def start(self, port: int = 8000, max_retries: int = 3) -> int:
+        """Start local auth server with retry logic"""
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
-        self.site = web.TCPSite(self.runner, "localhost", port)
-        await self.site.start()
+        
+        # Try ports in sequence if default is taken
+        for retry in range(max_retries):
+            try:
+                current_port = port + retry
+                self.site = web.TCPSite(self.runner, "localhost", current_port)
+                await self.site.start()
+                return current_port
+            except OSError as e:
+                if e.errno == 48 and retry < max_retries - 1:  # Address in use
+                    continue
+                raise  # Re-raise if we're out of retries or different error
 
     async def cleanup(self) -> None:
         """Cleanup server resources"""
-        if self.site:
-            await self.site.stop()
-        if self.runner:
-            await self.runner.cleanup()
+        try:
+            if self.site:
+                await self.site.stop()
+            if self.runner:
+                await self.runner.cleanup()
+        except Exception as e:
+            logger.error(f"Error during auth server cleanup: {e}")
 
     def get_redirect_uri(self, port: int = 8000) -> str:
         """Get redirect URI for auth flow"""
@@ -269,20 +282,21 @@ class XeroClient:
         """Start complete OAuth flow with local server"""
         await self.ensure_auth_config()
 
-        # Start local server
-        await self.auth_server.start(port)
-
-        # Create future to wait for callback
-        self.auth_server.auth_future = asyncio.Future()
-
-        # Open browser
-        auth_url = self.get_auth_url(port)
-        webbrowser.open(auth_url)
-
         try:
+            # Start local server with retry logic
+            actual_port = await self.auth_server.start(port)
+            
+            # Create future to wait for callback
+            self.auth_server.auth_future = asyncio.Future()
+
+            # Open browser with actual port
+            auth_url = self.get_auth_url(actual_port)
+            webbrowser.open(auth_url)
+
             # Wait for callback
             await self.auth_server.auth_future
             return True
+            
         except Exception as e:
             raise Exception(f"Authentication failed: {str(e)}")
         finally:

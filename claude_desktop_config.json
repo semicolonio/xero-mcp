@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+      "Xero App": {
+          "command": "/Users/nasir/.cargo/bin/uvx",
+          "args": [
+              "--from",
+              "git+https://github.com/semicolonio/xero-mcp.git",
+              "xero-mcp"
+          ],
+          "env": {
+              "XERO_CLIENT_ID": "your_client_id",
+              "XERO_CLIENT_SECRET": "your_client_secret"
+          }
+      }
+  }
+}
