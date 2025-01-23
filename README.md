@@ -50,12 +50,12 @@ A Model Context Protocol server that provides access to Xero's accounting API. T
 }
 ```
 
-For example, if `which uvx` returned `/Users/username/.cargo/bin/uvx`, your config would look like:
+For example, if `which uvx` returned `/Users/username/.local/bin/uvx`, your config would look like:
 ```json
 {
   "mcpServers": {
     "Xero App": {
-      "command": "/Users/username/.cargo/bin/uvx",
+      "command": "/Users/username/.local/bin/uvx",
       "args": [
         "--from",
         "git+https://github.com/semicolonio/xero-mcp.git",
