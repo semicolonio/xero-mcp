@@ -16,6 +16,9 @@ dependencies = [
 
 [tool.setuptools]
 packages = ["xero_mcp"]
+# Add this section to include non-Python files
+package-data = { "xero_mcp" = ["*.html"] }
+
 
 [project.scripts]
 xero-mcp = "xero_mcp.cli:run"

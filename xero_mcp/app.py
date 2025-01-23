@@ -86,7 +86,7 @@ class AuthServer:
         self.site: Optional[web.TCPSite] = None
 
         # Read the HTML template
-        template_path = Path(__file__).parent.parent / "auth_success.html"
+        template_path = Path(__file__).parent / "auth_success.html"
         try:
             self.success_template = template_path.read_text()
         except Exception as e:

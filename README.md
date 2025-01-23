@@ -2,6 +2,84 @@
 
 A Model Context Protocol server that provides access to Xero's accounting API. This server enables LLMs to interact with Xero's financial data, reports, and accounting resources.
 
+## Installation and Setup
+
+1. Install Claude Desktop from the official website
+
+2. Install UV and uvx:
+   ```bash
+   # Install UV following the official guide
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+
+   # Install uvx using UV
+   uv pip install uvx
+   ```
+
+3. Find your `uvx` path by running:
+   ```bash
+   which uvx
+   ```
+   This will output something like:
+   - Unix/macOS: `/Users/<username>/.local/bin/uvx`
+   - Windows: Run `where uvx` instead
+
+4. Get Xero API Credentials:
+   - Go to [Xero Developer Portal](https://developer.xero.com)
+   - Create a new app
+   - Set redirect URI to: `http://localhost:8000/callback`
+   - Copy Client ID and Client Secret
+
+5. Configure Claude Desktop:
+   - Open your `claude_desktop_config.json`
+   - Add the following to the "mcpServers" section, replacing the `command` value with your `uvx` path from step 3:
+
+```json
+{
+  "mcpServers": {
+    "Xero App": {
+      "command": "YOUR_UVX_PATH_HERE",
+      "args": [
+        "xero-mcp"
+      ],
+      "env": {
+        "XERO_CLIENT_ID": "your_client_id",
+        "XERO_CLIENT_SECRET": "your_client_secret"
+      }
+    }
+  }
+}
+```
+
+For example, if `which uvx` returned `/Users/username/.cargo/bin/uvx`, your config would look like:
+```json
+{
+  "mcpServers": {
+    "Xero App": {
+      "command": "/Users/username/.cargo/bin/uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/semicolonio/xero-mcp.git",
+        "xero-mcp"
+      ],
+      "env": {
+        "XERO_CLIENT_ID": "your_client_id",
+        "XERO_CLIENT_SECRET": "your_client_secret"
+      }
+    }
+  }
+}
+```
+
+Note: Replace `your_client_id` and `your_client_secret` with your Xero API credentials
+
+## Authentication
+
+The server handles OAuth2 authentication automatically:
+1. On first use, it opens your browser
+2. Log in to your Xero account
+3. Grant requested permissions
+4. Tokens are securely stored and auto-refreshed
+
 ## Components
 
 ### Tools
@@ -59,7 +137,7 @@ To use this server with Claude Desktop, add the following configuration to the "
 {
   "mcpServers": {
     "Xero App": {
-      "command": "~/.cargo/bin/uvx",
+      "command": "/Users/nasir/.cargo/bin/uvx",
       "args": [
         "--from",
         "git+https://github.com/semicolonio/xero-mcp.git",
@@ -75,9 +153,6 @@ To use this server with Claude Desktop, add the following configuration to the "
 ```
 
 Notes:
-- Replace `~/.cargo/bin/uvx` with your actual uvx path
-  - Unix/macOS: `~/.cargo/bin/uvx`
-  - Windows: `%USERPROFILE%\.cargo\bin\uvx`
 - Replace `your_client_id` and `your_client_secret` with your Xero API credentials
 - The server requires OAuth2 authentication on first use
 
@@ -93,14 +168,6 @@ cargo install uvx
 - Create a new app
 - Set redirect URI to: `http://localhost:8000/callback`
 - Copy Client ID and Client Secret
-
-## Authentication
-
-The server handles OAuth2 authentication automatically:
-1. On first use, it opens your browser
-2. Log in to your Xero account
-3. Grant requested permissions
-4. Tokens are securely stored and auto-refreshed
 
 ## Example Usage
 
