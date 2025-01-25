@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import sqlite3
 from venv import logger
 from fastmcp import FastMCP, Context
@@ -84,6 +85,7 @@ class AuthServer:
         self.state = secrets.token_urlsafe(32)
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
+        self.current_port: int = 8000
 
         # Read the HTML template
         template_path = Path(__file__).parent / "auth_success.html"
@@ -129,10 +131,10 @@ class AuthServer:
         # Try ports in sequence if default is taken
         for retry in range(max_retries):
             try:
-                current_port = port + retry
-                self.site = web.TCPSite(self.runner, "localhost", current_port)
+                self.current_port = port + retry
+                self.site = web.TCPSite(self.runner, "localhost", self.current_port)
                 await self.site.start()
-                return current_port
+                return self.current_port
             except OSError as e:
                 if e.errno == 48 and retry < max_retries - 1:  # Address in use
                     continue
@@ -143,14 +145,32 @@ class AuthServer:
         try:
             if self.site:
                 await self.site.stop()
+            if self.app:
+                self.app.shutdown()
             if self.runner:
                 await self.runner.cleanup()
+
         except Exception as e:
             logger.error(f"Error during auth server cleanup: {e}")
 
     def get_redirect_uri(self, port: int = 8000) -> str:
         """Get redirect URI for auth flow"""
         return f"http://localhost:{port}/callback"
+    
+    @asynccontextmanager
+    async def setup_server(self, port: int = 8000):
+        """Setup server and cleanup when exiting context"""
+        try:
+            self.current_port = port
+            self.auth_future = asyncio.Future()
+            await self.start(port)
+            yield self
+        finally:
+            await self.cleanup()
+
+    async def wait_until_auth_complete(self):
+        """Wait until authentication is complete"""
+        await self.auth_future
 
 
 mcp = FastMCP(
@@ -282,26 +302,18 @@ class XeroClient:
         """Start complete OAuth flow with local server"""
         await self.ensure_auth_config()
 
-        try:
-            # Start local server with retry logic
-            actual_port = await self.auth_server.start(port)
-            
-            # Create future to wait for callback
-            self.auth_server.auth_future = asyncio.Future()
+        async with self.auth_server.setup_server(port=8000) as server:
+            try:
+                # Open browser with actual port
+                auth_url = self.get_auth_url(server.current_port)
+                webbrowser.open(auth_url)
 
-            # Open browser with actual port
-            auth_url = self.get_auth_url(actual_port)
-            webbrowser.open(auth_url)
+                # Wait for callback
+                await server.wait_until_auth_complete()
+                return True
 
-            # Wait for callback
-            await self.auth_server.auth_future
-            return True
-            
-        except Exception as e:
-            raise Exception(f"Authentication failed: {str(e)}")
-        finally:
-            # Always cleanup the server
-            await self.auth_server.cleanup()
+            except Exception as e:
+                raise Exception(f"Authentication failed: {str(e)}")
 
     async def exchange_code(self, code: str) -> XeroToken:
         """Exchange authorization code for tokens"""
@@ -376,15 +388,13 @@ class XeroClient:
             )
 
 
-# Initialize Xero client
-xero = XeroClient()
-
-
 # Auth tools
 @mcp.tool(description="Tool to start Xero OAuth flow and automatically handle callback")
 async def xero_authenticate(ctx: Context) -> str:
     """Start Xero OAuth flow and automatically handle callback"""
     ctx.info("Starting Xero OAuth flow")
+    # Initialize Xero client
+    xero = XeroClient()
     if xero.token and xero.token.expires_at > datetime.utcnow().timestamp():
         return "Already authenticated"
 
@@ -399,6 +409,7 @@ async def xero_authenticate(ctx: Context) -> str:
 async def xero_get_auth_status(ctx: Context) -> str:
     """Check current authentication status"""
     ctx.info("Checking Xero authentication status")
+    xero = XeroClient()
     if not xero.token:
         return "Not authenticated"
 
@@ -410,7 +421,8 @@ async def xero_get_auth_status(ctx: Context) -> str:
 
 async def xero_call_endpoint(endpoint: str, params: dict | None = None):
     """Call a specific Xero API endpoint to interact with Xero's accounting data. Common endpoints include get_accounts, get_contacts, get_bank_transactions, get_payments, etc. To see all available endpoints, use xero_get_existing_endpoints(). If you need details about a specific endpoint's parameters, return types and field definitions, call xero_get_endpoint_docs() with the endpoint name. Each endpoint may require different parameters - if you're unsure about what parameters are needed, check the endpoint documentation first."""
-    await xero.refresh_if_needed()
+    xero = XeroClient()
+    # await xero.refresh_if_needed()
     api_client = await xero.ensure_client()
     accounting_api = AccountingApi(api_client)
     tenant_id = await xero.get_tenant_id()
