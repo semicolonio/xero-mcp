@@ -1,4 +1,4 @@
-from contextlib import asynccontextmanager
+from contextlib import contextmanager
 import sqlite3
 from venv import logger
 from fastmcp import FastMCP, Context
@@ -9,8 +9,8 @@ import json
 import os
 from pathlib import Path
 import webbrowser
-import asyncio
-from aiohttp import web
+import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import secrets
 from dotenv import load_dotenv
 from urllib.parse import urlencode
@@ -76,16 +76,56 @@ class XeroToken(BaseModel):
     scope: List[str] = []
 
 
+class AuthCallbackHandler(BaseHTTPRequestHandler):
+    def __init__(self, xero_client, state, success_template, *args, **kwargs):
+        self.xero_client = xero_client
+        self.state = state
+        self.success_template = success_template
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self):
+        """Handle OAuth callback"""
+        try:
+            # Parse query parameters
+            from urllib.parse import urlparse, parse_qs
+            query = parse_qs(urlparse(self.path).query)
+            
+            # Verify state to prevent CSRF
+            if query.get('state', [''])[0] != self.state:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Invalid state parameter")
+                return
+
+            # Exchange code for token
+            code = query.get('code', [''])[0]
+            if not code:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"No code provided")
+                return
+
+            # Exchange code for token
+            self.xero_client.exchange_code(code)
+
+            # Return success page
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(self.success_template.encode())
+
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(str(e).encode())
+
+
 class AuthServer:
     def __init__(self, xero_client):
         self.xero_client = xero_client
-        self.app = web.Application()
-        self.app.router.add_get("/callback", self.handle_callback)
-        self.auth_future: Optional[asyncio.Future] = None
         self.state = secrets.token_urlsafe(32)
-        self.runner: Optional[web.AppRunner] = None
-        self.site: Optional[web.TCPSite] = None
-        self.current_port: int = 8000
+        self.current_port = 8000
+        self.server = None
 
         # Read the HTML template
         template_path = Path(__file__).parent / "auth_success.html"
@@ -101,76 +141,53 @@ class AuthServer:
                 </body></html>
             """
 
-    async def handle_callback(self, request: web.Request) -> web.Response:
-        """Handle OAuth callback"""
-        try:
-            # Verify state to prevent CSRF
-            if request.query.get("state") != self.state:
-                return web.Response(text="Invalid state parameter", status=400)
+    def get_auth_url(self, port: int = 8000) -> str:
+        """Get Xero OAuth authorization URL"""
+        params = {
+            "response_type": "code",
+            "client_id": self.xero_client.auth_config.client_id,
+            "redirect_uri": self.get_redirect_uri(port),
+            "scope": " ".join(self.xero_client.auth_config.scope),
+            "state": self.state,
+        }
+        return f"https://login.xero.com/identity/connect/authorize?{urlencode(params)}"
 
-            # Exchange code for token
-            code = request.query.get("code")
-            if not code:
-                return web.Response(text="No code provided", status=400)
-
-            await self.xero_client.exchange_code(code)
-
-            # Return the HTML template
-            self.auth_future.set_result(True)
-            return web.Response(text=self.success_template, content_type="text/html")
-
-        except Exception as e:
-            self.auth_future.set_exception(e)
-            return web.Response(text=str(e), status=500)
-
-    async def start(self, port: int = 8000, max_retries: int = 3) -> int:
+    def start(self, port: int = 8000, max_retries: int = 3) -> int:
         """Start local auth server with retry logic"""
-        self.runner = web.AppRunner(self.app)
-        await self.runner.setup()
-        
-        # Try ports in sequence if default is taken
         for retry in range(max_retries):
             try:
                 self.current_port = port + retry
-                self.site = web.TCPSite(self.runner, "localhost", self.current_port)
-                await self.site.start()
+                handler = lambda *args: AuthCallbackHandler(self.xero_client, self.state, self.success_template, *args)
+                self.server = HTTPServer(('localhost', self.current_port), handler)
                 return self.current_port
             except OSError as e:
                 if e.errno == 48 and retry < max_retries - 1:  # Address in use
                     continue
                 raise  # Re-raise if we're out of retries or different error
 
-    async def cleanup(self) -> None:
+    def cleanup(self) -> None:
         """Cleanup server resources"""
-        try:
-            if self.site:
-                await self.site.stop()
-            if self.app:
-                self.app.shutdown()
-            if self.runner:
-                await self.runner.cleanup()
-
-        except Exception as e:
-            logger.error(f"Error during auth server cleanup: {e}")
+        if self.server:
+            self.server.server_close()
 
     def get_redirect_uri(self, port: int = 8000) -> str:
         """Get redirect URI for auth flow"""
         return f"http://localhost:{port}/callback"
-    
-    @asynccontextmanager
-    async def setup_server(self, port: int = 8000):
+
+    @contextmanager
+    def setup_server(self, port: int = 8000):
         """Setup server and cleanup when exiting context"""
         try:
             self.current_port = port
-            self.auth_future = asyncio.Future()
-            await self.start(port)
+            port = self.start(port)
             yield self
         finally:
-            await self.cleanup()
+            self.cleanup()
 
-    async def wait_until_auth_complete(self):
+    def wait_until_auth_complete(self):
         """Wait until authentication is complete"""
-        await self.auth_future
+        if self.server:
+            self.server.handle_request()  # Handle one request and return
 
 
 mcp = FastMCP(
@@ -222,7 +239,7 @@ class XeroClient:
         except OSError as e:
             print(f"Error saving token: {e}")
 
-    async def ensure_client(self) -> ApiClient:
+    def ensure_client(self) -> ApiClient:
         """Get or create authenticated API client"""
         if not self._api_client:
             config = Configuration(
@@ -275,10 +292,10 @@ class XeroClient:
 
         return self._api_client
 
-    async def get_tenant_id(self) -> str:
+    def get_tenant_id(self) -> str:
         """Get the tenant ID for the authenticated organization"""
         if not self._tenant_id:
-            api_client = await self.ensure_client()
+            api_client = self.ensure_client()
             identity_api = IdentityApi(api_client)
             connections = identity_api.get_connections()
             for connection in connections:
@@ -287,37 +304,26 @@ class XeroClient:
                     break
         return self._tenant_id
 
-    def get_auth_url(self, port: int = 8000) -> str:
-        """Get Xero OAuth authorization URL"""
-        params = {
-            "response_type": "code",
-            "client_id": self.auth_config.client_id,
-            "redirect_uri": self.auth_server.get_redirect_uri(port),
-            "scope": " ".join(self.auth_config.scope),
-            "state": self.auth_server.state,
-        }
-        return f"https://login.xero.com/identity/connect/authorize?{urlencode(params)}"
-
-    async def start_auth_flow(self, port: int = 8000) -> bool:
+    def start_auth_flow(self, port: int = 8000) -> bool:
         """Start complete OAuth flow with local server"""
-        await self.ensure_auth_config()
+        self.ensure_auth_config()
 
-        async with self.auth_server.setup_server(port=8000) as server:
+        with self.auth_server.setup_server(port=8000) as server:
             try:
                 # Open browser with actual port
-                auth_url = self.get_auth_url(server.current_port)
+                auth_url = self.auth_server.get_auth_url(server.current_port)
                 webbrowser.open(auth_url)
 
                 # Wait for callback
-                await server.wait_until_auth_complete()
+                server.wait_until_auth_complete()
                 return True
 
             except Exception as e:
                 raise Exception(f"Authentication failed: {str(e)}")
 
-    async def exchange_code(self, code: str) -> XeroToken:
+    def exchange_code(self, code: str) -> XeroToken:
         """Exchange authorization code for tokens"""
-        await self.ensure_auth_config()
+        self.ensure_auth_config()
 
         # Create OAuth2 session for token exchange
         client = OAuth2Session(
@@ -347,9 +353,9 @@ class XeroClient:
         self.token = xero_token
         return xero_token
 
-    async def refresh_if_needed(self):
+    def refresh_if_needed(self):
         """Refresh token if expired"""
-        await self.ensure_auth_config()
+        self.ensure_auth_config()
 
         if not self.token:
             raise ValueError("No token available")
@@ -380,7 +386,7 @@ class XeroClient:
                 ),
             )
 
-    async def ensure_auth_config(self):
+    def ensure_auth_config(self):
         """Ensure auth config is available"""
         if not self.auth_config:
             raise ValueError(
@@ -390,7 +396,7 @@ class XeroClient:
 
 # Auth tools
 @mcp.tool(description="Tool to start Xero OAuth flow and automatically handle callback")
-async def xero_authenticate(ctx: Context) -> str:
+def xero_authenticate(ctx: Context) -> str:
     """Start Xero OAuth flow and automatically handle callback"""
     ctx.info("Starting Xero OAuth flow")
     # Initialize Xero client
@@ -399,14 +405,20 @@ async def xero_authenticate(ctx: Context) -> str:
         return "Already authenticated"
 
     try:
-        await xero.start_auth_flow()
-        return "Authentication completed successfully"
+        with xero.auth_server.setup_server() as server:
+            # Open browser with actual port
+            auth_url = xero.auth_server.get_auth_url(server.current_port)
+            webbrowser.open(auth_url)
+            
+            # Wait for callback
+            server.wait_until_auth_complete()
+            return "Authentication completed successfully"
     except Exception as e:
         return f"Authentication failed: {str(e)}"
 
 
 @mcp.tool(description="Tool to check current authentication status")
-async def xero_get_auth_status(ctx: Context) -> str:
+def xero_get_auth_status(ctx: Context) -> str:
     """Check current authentication status"""
     ctx.info("Checking Xero authentication status")
     xero = XeroClient()
@@ -419,13 +431,13 @@ async def xero_get_auth_status(ctx: Context) -> str:
     return f"Authenticated (token expires in {int(expires_in)} seconds)"
 
 
-async def xero_call_endpoint(endpoint: str, params: dict | None = None):
-    """Call a specific Xero API endpoint to interact with Xero's accounting data. Common endpoints include get_accounts, get_contacts, get_bank_transactions, get_payments, etc. To see all available endpoints, use xero_get_existing_endpoints(). If you need details about a specific endpoint's parameters, return types and field definitions, call xero_get_endpoint_docs() with the endpoint name. Each endpoint may require different parameters - if you're unsure about what parameters are needed, check the endpoint documentation first."""
+def xero_call_endpoint(endpoint: str, params: dict | None = None):
+    """Call a specific Xero API endpoint"""
     xero = XeroClient()
-    # await xero.refresh_if_needed()
-    api_client = await xero.ensure_client()
+    xero.refresh_if_needed()
+    api_client = xero.ensure_client()
     accounting_api = AccountingApi(api_client)
-    tenant_id = await xero.get_tenant_id()
+    tenant_id = xero.get_tenant_id()
     params = params or {}
     func = getattr(accounting_api, endpoint)
     if not func:
@@ -436,70 +448,16 @@ async def xero_call_endpoint(endpoint: str, params: dict | None = None):
     return response
 
 
-@mcp.tool(
-    description="""Tool to retrieve accounts from Xero's accounting system.
-    Returns account details including:
-    - Code: Customer defined alpha numeric account code (e.g. 200 or SALES)
-    - Name: Name of account 
-    - Type: Account type (e.g. BANK, REVENUE, CURRENT)
-    - BankAccountNumber: For bank accounts only
-    - Status: ACTIVE or ARCHIVED
-    - Description: Account description (except bank accounts)
-    - BankAccountType: For bank accounts only
-    - CurrencyCode: For bank accounts only
-    - TaxType: Tax type code
-    - EnablePaymentsToAccount: Whether account can have payments applied
-    - ShowInExpenseClaims: Whether available for expense claims
-    - AccountID: Unique Xero identifier
-    - Class: Account class type
-    - SystemAccount: System account type if applicable
-    - HasAttachments: Whether account has attachments
-    - UpdatedDateUTC: Last modified date
-    
-    Parameters:
-        where: Optional filter by any element
-            Example: 'Type == "BANK"'
-            
-    Returns:
-        str: JSON string containing list of accounts with their details
-    """
-)
-async def xero_get_accounts(where: str = None) -> str:
+@mcp.tool(description="Tool to retrieve accounts from Xero")
+def xero_get_accounts(where: str = None) -> str:
     """Get all accounts from Xero"""
     params = {"where": where} if where else None
-    response = await xero_call_endpoint("get_accounts", params=params)
+    response = xero_call_endpoint("get_accounts", params=params)
     return json.dumps(serialize_list(response.accounts), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve contacts (customers and suppliers) from Xero.
-    Returns contact details including:
-    - ContactID: Unique Xero identifier
-    - ContactNumber: External system identifier (Contact Code in UI)
-    - AccountNumber: User defined account number
-    - Name: Full name of contact/organization
-    - FirstName/LastName: Contact person name
-    - EmailAddress: Contact email
-    - Addresses: Physical and postal addresses
-    - Phones: Contact phone numbers
-    - IsSupplier/IsCustomer: Whether contact is supplier/customer
-    - DefaultCurrency: Default invoice currency
-    - TaxNumber: Tax/VAT/GST number
-    - AccountsReceivableTaxType: Default tax for AR invoices
-    - AccountsPayableTaxType: Default tax for AP invoices
-    - ContactStatus: ACTIVE or ARCHIVED
-    - UpdatedDateUTC: Last modified date
-    
-    For optimal performance:
-    - Use page parameter to retrieve up to 100 contacts per call
-    - Filter using optimized fields: Name, EmailAddress, AccountNumber
-    - Use SearchTerm for partial text search across multiple fields
-    - Use summaryOnly=true for lightweight response
-    - Use IDs parameter to retrieve specific contacts
-    
-    Returns a JSON string containing contacts list."""
-)
-async def xero_get_contacts(
+@mcp.tool(description="Tool to retrieve contacts from Xero")
+def xero_get_contacts(
     where: str = None,
     page: int = None,
     search_term: str = None,
@@ -507,7 +465,6 @@ async def xero_get_contacts(
     include_archived: bool = False,
     summary_only: bool = False,
 ) -> str:
-    """ """
     params = {}
     if where:
         params["where"] = where
@@ -522,33 +479,11 @@ async def xero_get_contacts(
     if summary_only:
         params["summary_only"] = summary_only
 
-    return await xero_call_endpoint("get_contacts", params=params)
+    return xero_call_endpoint("get_contacts", params=params)
 
 
-@mcp.tool(
-    description="""Retrieves a Balance Sheet report from Xero for a specified date.
-
-    The Balance Sheet shows the financial position at the end of the specified month, including:
-    - Assets (Bank accounts, Current assets, Fixed assets etc)
-    - Liabilities (Current liabilities, Non-current liabilities etc) 
-    - Equity
-    
-    It also compares values to the same month in the previous year.
-
-    Required parameters:
-    - date: Report date in YYYY-MM-DD format (e.g. 2024-01-31)
-
-    Optional parameters:
-    - periods: Number of periods to compare (1-11)
-    - timeframe: Period size to compare (MONTH, QUARTER, YEAR)
-    - tracking_option_id_1: Filter by first tracking category option
-    - tracking_option_id_2: Filter by second tracking category option  
-    - standard_layout: Set true to ignore custom report layouts
-    - payments_only: Set true to show only cash transactions
-
-    Returns a JSON string containing the Balance Sheet report data."""
-)
-async def xero_get_balance_sheet(
+@mcp.tool(description="Tool to retrieve a Balance Sheet report from Xero")
+def xero_get_balance_sheet(
     date: str,
     periods: int = None,
     timeframe: str = None,
@@ -572,38 +507,12 @@ async def xero_get_balance_sheet(
     if tracking_option_id_2:
         params["tracking_option_id_2"] = tracking_option_id_2
 
-    response = await xero_call_endpoint("get_report_balance_sheet", params=params)
+    response = xero_call_endpoint("get_report_balance_sheet", params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
-@mcp.tool(
-    description="""Retrieves a Profit and Loss report from Xero for a specified date range.
-
-    The Profit and Loss report shows the financial performance over the specified period, including:
-    - Income
-    - Expenses 
-    - Net profit/loss
-
-    Required parameters:
-    - from_date: Start date in YYYY-MM-DD format (e.g. 2024-01-01)
-    - to_date: End date in YYYY-MM-DD format (e.g. 2024-01-31)
-
-    Optional parameters:
-    - periods: Number of periods to compare (1-11)
-    - timeframe: Period size to compare (MONTH, QUARTER, YEAR)
-    - tracking_category_id: Filter by first tracking category, shows figures for each option
-    - tracking_category_id_2: Filter by second tracking category, shows figures for each option combination
-    - tracking_option_id: When used with tracking_category_id, shows figures for just one option
-    - tracking_option_id_2: When used with tracking_category_id_2, shows figures for just one option
-    - standard_layout: Set true to ignore custom report layouts
-    - payments_only: Set true to show only cash transactions
-
-    Note: When using periods with from_date/to_date, the date range applies to each period.
-    For consistent month data across periods, start in a 31-day month.
-
-    Returns a JSON string containing the Profit and Loss report data."""
-)
-async def xero_get_profit_and_loss(
+@mcp.tool(description="Tool to retrieve a Profit and Loss report from Xero")
+def xero_get_profit_and_loss(
     from_date: str,
     to_date: str,
     periods: int = None,
@@ -635,33 +544,12 @@ async def xero_get_profit_and_loss(
     if tracking_option_id_2:
         params["tracking_option_id_2"] = tracking_option_id_2
 
-    response = await xero_call_endpoint("get_report_profit_and_loss", params=params)
+    response = xero_call_endpoint("get_report_profit_and_loss", params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve an Aged Payables by Contact report from Xero.
-    Returns aged payables report details including:
-    - Date
-    - Reference
-    - Due Date
-    - Total Amount
-    - Amount Paid
-    - Amount Credited 
-    - Amount Due
-    - Aging periods (current, overdue)
-    
-    Parameters:
-        contactID: Required - Contact ID to get aged payables for
-        date: Optional - Show payments up to this date (defaults to end of current month)
-        fromDate: Optional - Show payable invoices from this date
-        toDate: Optional - Show payable invoices to this date
-    
-    Returns:
-        str: JSON string containing aged payables report with payment details
-    """
-)
-async def xero_get_aged_payables_by_contact(
+@mcp.tool(description="Tool to retrieve an Aged Payables by Contact report from Xero")
+def xero_get_aged_payables_by_contact(
     contact_id: str,
     date: str = None,
     from_date: str = None,
@@ -676,35 +564,12 @@ async def xero_get_aged_payables_by_contact(
     if to_date:
         params["to_date"] = to_date
 
-    response = await xero_call_endpoint(
-        "get_report_aged_payables_by_contact", params=params
-    )
+    response = xero_call_endpoint("get_report_aged_payables_by_contact", params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve an Aged Receivables by Contact report from Xero.
-    Returns aged receivables report details including:
-    - Date
-    - Reference
-    - Due Date
-    - Total Amount
-    - Amount Paid
-    - Amount Credited 
-    - Amount Due
-    - Aging periods (current, overdue)
-    
-    Parameters:
-        contactID: Required - Contact ID to get aged receivables for
-        date: Optional - Show payments up to this date (defaults to end of current month)
-        fromDate: Optional - Show receivable invoices from this date
-        toDate: Optional - Show receivable invoices to this date
-    
-    Returns:
-        str: JSON string containing aged receivables report with payment details
-    """
-)
-async def xero_get_aged_receivables_by_contact(
+@mcp.tool(description="Tool to retrieve an Aged Receivables by Contact report from Xero")
+def xero_get_aged_receivables_by_contact(
     contact_id: str,
     date: str = None,
     from_date: str = None,
@@ -719,30 +584,12 @@ async def xero_get_aged_receivables_by_contact(
     if to_date:
         params["to_date"] = to_date
 
-    response = await xero_call_endpoint(
-        "get_report_aged_receivables_by_contact", params=params
-    )
+    response = xero_call_endpoint("get_report_aged_receivables_by_contact", params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve a Bank Summary report from Xero.
-    Returns bank account balances and cash movements including:
-    - Opening balance for each bank account
-    - Cash received
-    - Cash spent
-    - Closing balance
-    - Net cash movement
-    
-    Optional parameters:
-        from_date: Start date for the report (e.g. 2024-01-01)
-        to_date: End date for the report (e.g. 2024-01-31)
-    
-    Returns:
-        str: JSON string containing bank summary report with balances and cash movements
-    """
-)
-async def xero_get_bank_summary(
+@mcp.tool(description="Tool to retrieve a Bank Summary report from Xero")
+def xero_get_bank_summary(
     from_date: str = None,
     to_date: str = None,
 ) -> str:
@@ -753,27 +600,12 @@ async def xero_get_bank_summary(
     if to_date:
         params["to_date"] = to_date
 
-    response = await xero_call_endpoint("get_report_bank_summary", params=params)
+    response = xero_call_endpoint("get_report_bank_summary", params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve a Budget Summary report from Xero.
-    Returns a summary of monthly budget including:
-    - Monthly budget figures
-    - Actual vs budget comparisons
-    - Budget variances
-    
-    Optional parameters:
-        date: Report date (e.g. 2024-01-31)
-        periods: Number of periods to compare (integer between 1 and 12)
-        timeframe: Period size to compare (1=month, 3=quarter, 12=year)
-    
-    Returns:
-        str: JSON string containing budget summary report with monthly totals and comparisons
-    """
-)
-async def xero_get_budget_summary(
+@mcp.tool(description="Tool to retrieve a Budget Summary report from Xero")
+def xero_get_budget_summary(
     date: str = None,
     periods: int = None,
     timeframe: int = None,
@@ -787,27 +619,12 @@ async def xero_get_budget_summary(
     if timeframe:
         params["timeframe"] = timeframe
 
-    response = await xero_call_endpoint("get_report_budget_summary", params=params)
+    response = xero_call_endpoint("get_report_budget_summary", params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve an Executive Summary report from Xero.
-    Returns a business performance summary including:
-    - Monthly totals
-    - Common business ratios
-    - Key performance indicators
-    - Cash position
-    - Profitability metrics
-    
-    Optional parameters:
-        date: Report date (e.g. 2024-01-31)
-    
-    Returns:
-        str: JSON string containing executive summary report with business performance metrics
-    """
-)
-async def xero_get_executive_summary(
+@mcp.tool(description="Tool to retrieve an Executive Summary report from Xero")
+def xero_get_executive_summary(
     date: str = None,
 ) -> str:
     params = {}
@@ -815,32 +632,12 @@ async def xero_get_executive_summary(
     if date:
         params["date"] = date
 
-    response = await xero_call_endpoint("get_report_executive_summary", params=params)
+    response = xero_call_endpoint("get_report_executive_summary", params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve bank transactions from Xero.
-    Returns bank transaction details including:
-    - Type (SPEND/RECEIVE/SPEND-PREPAYMENT/RECEIVE-PREPAYMENT/SPEND-OVERPAYMENT/RECEIVE-OVERPAYMENT)
-    - Contact details
-    - Line items
-    - Bank account details
-    - Date, reference, currency
-    - Status and reconciliation state
-    - Amounts (subtotal, tax, total)
-    
-    Optional parameters:
-        where: Filter by any element (e.g. Type=="SPEND", Status=="AUTHORISED")
-        order: Order by any element
-        page: Page number for pagination (up to 100 transactions per page)
-        modified_after: Only return transactions created/modified after this timestamp
-    
-    Returns:
-        str: JSON string containing bank transactions data
-    """
-)
-async def xero_get_bank_transactions(
+@mcp.tool(description="Tool to retrieve bank transactions from Xero")
+def xero_get_bank_transactions(
     where: str = None,
     order: str = None,
     page: int = None,
@@ -857,31 +654,12 @@ async def xero_get_bank_transactions(
     if modified_after:
         params["modified_after"] = modified_after
 
-    response = await xero_call_endpoint("get_bank_transactions", params=params)
+    response = xero_call_endpoint("get_bank_transactions", params=params)
     return json.dumps(serialize_list(response.bank_transactions), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve payments from Xero.
-    Returns payment details including:
-    - Date and amount
-    - Payment type and status
-    - Reference
-    - Bank account details
-    - Invoice/credit note details
-    - Reconciliation status
-    
-    Optional parameters:
-        where: Filter by any element (e.g. Status=="AUTHORISED")
-        order: Order by any element
-        page: Page number for pagination (up to 100 payments per page)
-        modified_after: Only return payments created/modified after this timestamp
-    
-    Returns:
-        str: JSON string containing payments data
-    """
-)
-async def xero_get_payments(
+@mcp.tool(description="Tool to retrieve payments from Xero")
+def xero_get_payments(
     where: str = None,
     order: str = None,
     page: int = None,
@@ -898,36 +676,12 @@ async def xero_get_payments(
     if modified_after:
         params["modified_after"] = modified_after
 
-    response = await xero_call_endpoint("get_payments", params=params)
+    response = xero_call_endpoint("get_payments", params=params)
     return json.dumps(serialize_list(response.payments), indent=2)
 
 
-@mcp.tool(
-    description="""Tool to retrieve invoices from Xero.
-    Returns invoice details including:
-    - Type (ACCREC/ACCPAY)
-    - Contact details
-    - Line items with descriptions, quantities, amounts
-    - Dates (invoice date, due date)
-    - Status and amounts (due, paid, credited)
-    - Currency and tax details
-    
-    Optional parameters:
-        where: Filter by any element (e.g. Status=="AUTHORISED", Type=="ACCREC")
-        order: Order by any element (optimized for: InvoiceId, UpdatedDateUTC, Date)
-        page: Page number for pagination (up to 100 invoices per page)
-        modified_after: Only return invoices created/modified after this timestamp
-        ids: Filter by comma-separated list of invoice IDs
-        invoice_numbers: Filter by comma-separated list of invoice numbers
-        contact_ids: Filter by comma-separated list of contact IDs
-        statuses: Filter by comma-separated list of statuses
-        summary_only: Return lightweight response without payments, attachments, line items
-    
-    Returns:
-        str: JSON string containing invoices data
-    """
-)
-async def xero_get_invoices(
+@mcp.tool(description="Tool to retrieve invoices from Xero")
+def xero_get_invoices(
     where: str = None,
     order: str = None,
     page: int = None,
@@ -939,7 +693,7 @@ async def xero_get_invoices(
     summary_only: bool = False,
 ) -> str:
     params = {}
-    
+
     if where:
         params["where"] = where
     if order:
@@ -959,9 +713,99 @@ async def xero_get_invoices(
     if summary_only:
         params["summary_only"] = summary_only
 
-    response = await xero_call_endpoint("get_invoices", params=params)
+    response = xero_call_endpoint("get_invoices", params=params)
     return json.dumps(serialize_list(response.invoices), indent=2)
 
+
+@mcp.tool(description="Tool to retrieve configuration and debug information")
+def xero_get_config_info() -> str:
+    """Get configuration and debug information"""
+    try:
+        # Get environment variables status
+        env_vars = {
+            "XERO_CLIENT_ID": bool(os.getenv("XERO_CLIENT_ID")),
+            "XERO_CLIENT_SECRET": bool(os.getenv("XERO_CLIENT_SECRET")),
+            "CONFIG_DIR": os.getenv("CONFIG_DIR"),
+        }
+
+        # Get config directory info
+        config_info = {
+            "config_dir": str(CONFIG_DIR),
+            "config_dir_exists": CONFIG_DIR.exists(),
+            "config_dir_is_dir": CONFIG_DIR.is_dir() if CONFIG_DIR.exists() else None,
+        }
+
+        # Get token file status
+        token_path = CONFIG_DIR / "token.json"
+        token_info = {
+            "token_file_path": str(token_path),
+            "token_file_exists": token_path.exists(),
+            "token_file_size": token_path.stat().st_size if token_path.exists() else None,
+            "token_file_modified": datetime.fromtimestamp(token_path.stat().st_mtime).isoformat() if token_path.exists() else None,
+        }
+
+        # Get database file status
+        db_path = CONFIG_DIR / "xero_analytics.db"
+        db_info = {
+            "db_file_path": str(db_path),
+            "db_file_exists": db_path.exists(),
+            "db_file_size": db_path.stat().st_size if db_path.exists() else None,
+            "db_file_modified": datetime.fromtimestamp(db_path.stat().st_mtime).isoformat() if db_path.exists() else None,
+        }
+
+        # Get auth config status
+        xero = XeroClient()
+        auth_info = {
+            "auth_config_loaded": bool(xero.auth_config),
+            "token_loaded": bool(xero.token),
+            "token_expired": bool(xero.token and datetime.utcnow().timestamp() >= xero.token.expires_at) if xero.token else None,
+        }
+
+        debug_info = {
+            "environment_variables": env_vars,
+            "config_directory": config_info,
+            "token_file": token_info,
+            "database_file": db_info,
+            "authentication": auth_info,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        return json.dumps(debug_info, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat(),
+        }, indent=2)
+
+
+# Resources for commonly accessed Xero data
+@mcp.resource("xero://accounts/chart")
+def get_chart_of_accounts() -> str:
+    """Get the organization's chart of accounts"""
+    try:
+        accounts = xero_call_endpoint("get_accounts")
+        return json.dumps(serialize_list(accounts.accounts), indent=2)
+    except Exception as e:
+        return f"Error retrieving chart of accounts: {str(e)}"
+
+
+# Sample prompt for financial analysis
+@mcp.prompt()
+def analyze_financial_data(report_type: str, date: str) -> str:
+    """Create a prompt for analyzing Xero financial data.
+
+    Args:
+        report_type: Type of report to analyze (e.g. "balance_sheet", "profit_and_loss")
+        date: Report date in YYYY-MM-DD format
+    """
+    return f"""Please analyze this {report_type} report from {date}.
+Focus on:
+1. Key financial metrics and ratios
+2. Notable trends or changes
+3. Areas that need attention
+4. Recommendations for improvement
+
+Report data will be provided separately through the appropriate Xero API call."""
 
 
 # Helper functions
@@ -1018,3 +862,197 @@ def ensure_tables_exist(conn: sqlite3.Connection):
 
 #     This structured approach ensures efficient and accurate interaction with the Xero API, helping you achieve your objectives effectively.\
 #     """
+
+
+# Resources for commonly accessed Xero data
+@mcp.resource("xero://accounts/{account_type}")
+def get_accounts_by_type(account_type: str) -> str:
+    """Get accounts filtered by type (e.g. BANK, REVENUE, EXPENSE, etc.)"""
+    try:
+        accounts = xero_call_endpoint(
+            "get_accounts", params={"where": f'Type=="{account_type}"'}
+        )
+        return json.dumps(serialize_list(accounts.accounts), indent=2)
+    except Exception as e:
+        return f"Error retrieving accounts: {str(e)}"
+
+
+@mcp.resource("xero://reports/current_month")
+def get_current_month_reports() -> str:
+    """Get key financial reports for the current month"""
+    try:
+        today = datetime.now()
+        first_of_month = today.replace(day=1).strftime("%Y-%m-%d")
+        last_of_month = today.strftime("%Y-%m-%d")
+
+        # Get both P&L and balance sheet
+        pl = xero_call_endpoint(
+            "get_report_profit_and_loss",
+            params={"from_date": first_of_month, "to_date": last_of_month},
+        )
+        bs = xero_call_endpoint(
+            "get_report_balance_sheet", params={"date": last_of_month}
+        )
+
+        return json.dumps(
+            {
+                "profit_and_loss": serialize_list(pl.reports),
+                "balance_sheet": serialize_list(bs.reports),
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"Error retrieving reports: {str(e)}"
+
+
+@mcp.resource("xero://dashboard/overview")
+def get_financial_overview() -> str:
+    """Get a comprehensive financial overview including bank balances and key metrics"""
+    try:
+        # Get bank summary
+        bank_summary = xero_call_endpoint("get_report_bank_summary")
+
+        # Get executive summary
+        exec_summary = xero_call_endpoint(
+            "get_report_executive_summary",
+            params={"date": datetime.now().strftime("%Y-%m-%d")},
+        )
+
+        return json.dumps(
+            {
+                "bank_summary": serialize_list(bank_summary.reports),
+                "executive_summary": serialize_list(exec_summary.reports),
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"Error retrieving overview: {str(e)}"
+
+
+# Enhanced prompts for financial analysis
+@mcp.prompt()
+def analyze_cash_flow(from_date: str, to_date: str) -> str:
+    """Create a prompt for analyzing cash flow.
+
+    Args:
+        from_date: Start date in YYYY-MM-DD format
+        to_date: End date in YYYY-MM-DD format
+    """
+    return f"""Please analyze the cash flow situation from {from_date} to {to_date}.
+Focus on:
+1. Operating cash flow trends
+2. Major cash inflows and outflows
+3. Working capital management
+4. Cash flow forecasting
+5. Recommendations for improving cash position
+
+Consider:
+- Bank account balances and movements
+- Accounts receivable aging
+- Accounts payable commitments
+- Upcoming payment obligations"""
+
+
+@mcp.prompt()
+def review_financial_health() -> str:
+    """Create a prompt for reviewing overall financial health"""
+    return """Please analyze the organization's overall financial health.
+Focus on:
+1. Profitability Analysis
+   - Gross profit margins
+   - Operating margins
+   - Net profit trends
+
+2. Liquidity Assessment
+   - Current ratio
+   - Quick ratio
+   - Working capital
+
+3. Efficiency Metrics
+   - Accounts receivable turnover
+   - Accounts payable turnover
+   - Inventory turnover (if applicable)
+
+4. Growth Analysis
+   - Revenue growth
+   - Profit growth
+   - Market share trends
+
+5. Risk Assessment
+   - Debt levels
+   - Credit risk
+   - Operating leverage
+
+Please provide:
+- Key strengths and weaknesses
+- Comparison to industry benchmarks (if available)
+- Specific recommendations for improvement
+- Areas requiring immediate attention"""
+
+
+@mcp.prompt()
+def analyze_aged_receivables(contact_id: str = None) -> str:
+    """Create a prompt for analyzing aged receivables.
+
+    Args:
+        contact_id: Optional specific contact to analyze
+    """
+    base_prompt = """Please analyze the aged receivables report.
+Focus on:
+1. Overall Collection Health
+   - Total outstanding receivables
+   - Age distribution of receivables
+   - Collection efficiency metrics
+
+2. Risk Assessment
+   - Identify high-risk accounts
+   - Analyze payment patterns
+   - Flag potential bad debts
+
+3. Action Items
+   - Prioritized collection targets
+   - Recommended follow-up actions
+   - Suggested policy changes
+
+4. Trends and Patterns
+   - Historical collection trends
+   - Seasonal patterns
+   - Customer payment behaviors"""
+
+    if contact_id:
+        return (
+            base_prompt + f"\n\nPlease focus specifically on contact ID: {contact_id}"
+        )
+    return base_prompt
+
+
+@mcp.prompt()
+def budget_variance_analysis(date: str) -> str:
+    """Create a prompt for analyzing budget variances.
+
+    Args:
+        date: Report date in YYYY-MM-DD format
+    """
+    return f"""Please analyze the budget variances as of {date}.
+Focus on:
+1. Significant Variances
+   - Major favorable and unfavorable variances
+   - Root cause analysis of variances
+   - Impact on overall financial performance
+
+2. Trend Analysis
+   - Recurring variance patterns
+   - Seasonal factors
+   - Progressive changes over time
+
+3. Performance Assessment
+   - Department/category performance
+   - Cost control effectiveness
+   - Revenue target achievement
+
+4. Recommendations
+   - Budget adjustment needs
+   - Control improvement opportunities
+   - Strategic implications
+
+Please provide actionable insights and specific recommendations for addressing variances."""
