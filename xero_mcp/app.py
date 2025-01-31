@@ -2,7 +2,7 @@ from contextlib import contextmanager
 import sqlite3
 from venv import logger
 from fastmcp import FastMCP, Context
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
 import json
@@ -929,35 +929,120 @@ def get_financial_overview() -> str:
         return f"Error retrieving overview: {str(e)}"
 
 
-# Enhanced prompts for financial analysis
+# Financial Reports Resources
+@mcp.resource("xero://reports/balance_sheet/{date}")
+def get_balance_sheet(date: str) -> str:
+    """Get balance sheet report for a specific date"""
+    try:
+        response = xero_call_endpoint(
+            "get_report_balance_sheet",
+            params={"date": date}
+        )
+        return json.dumps(serialize_list(response.reports), indent=2)
+    except Exception as e:
+        return f"Error retrieving balance sheet: {str(e)}"
+
+@mcp.resource("xero://reports/profit_and_loss/{from_date}/{to_date}")
+def get_profit_and_loss(from_date: str, to_date: str) -> str:
+    """Get profit and loss report for a date range"""
+    try:
+        response = xero_call_endpoint(
+            "get_report_profit_and_loss",
+            params={"from_date": from_date, "to_date": to_date}
+        )
+        return json.dumps(serialize_list(response.reports), indent=2)
+    except Exception as e:
+        return f"Error retrieving profit and loss report: {str(e)}"
+
+# Also add default resources for current period
+@mcp.resource("xero://reports/balance_sheet/current")
+def get_current_balance_sheet() -> str:
+    """Get balance sheet report for current date"""
+    try:
+        date = datetime.now().strftime("%Y-%m-%d")
+        response = xero_call_endpoint(
+            "get_report_balance_sheet",
+            params={"date": date}
+        )
+        return json.dumps(serialize_list(response.reports), indent=2)
+    except Exception as e:
+        return f"Error retrieving balance sheet: {str(e)}"
+
+@mcp.resource("xero://reports/profit_and_loss/current")
+def get_current_profit_and_loss() -> str:
+    """Get profit and loss report for current month"""
+    try:
+        today = datetime.now()
+        from_date = today.replace(day=1).strftime("%Y-%m-%d")
+        to_date = today.strftime("%Y-%m-%d")
+        
+        response = xero_call_endpoint(
+            "get_report_profit_and_loss",
+            params={"from_date": from_date, "to_date": to_date}
+        )
+        return json.dumps(serialize_list(response.reports), indent=2)
+    except Exception as e:
+        return f"Error retrieving profit and loss report: {str(e)}"
+
+# Account Management Resources
+@mcp.resource("xero://accounts/receivables")
+def get_receivables_summary() -> str:
+    """Get summary of accounts receivable"""
+    try:
+        response = xero_call_endpoint(
+            "get_accounts",
+            params={"where": "Type==\"RECEIVABLE\""}
+        )
+        return json.dumps(serialize_list(response.accounts), indent=2)
+    except Exception as e:
+        return f"Error retrieving receivables: {str(e)}"
+
+@mcp.resource("xero://accounts/payables")
+def get_payables_summary() -> str:
+    """Get summary of accounts payable"""
+    try:
+        response = xero_call_endpoint(
+            "get_accounts",
+            params={"where": "Type==\"PAYABLE\""}
+        )
+        return json.dumps(serialize_list(response.accounts), indent=2)
+    except Exception as e:
+        return f"Error retrieving payables: {str(e)}"
+
+# Transaction Resources
+@mcp.resource("xero://transactions/recent/{days}")
+def get_recent_transactions(days: int) -> str:
+    """Get recent transactions for the specified number of days"""
+    try:
+        from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        response = xero_call_endpoint(
+            "get_bank_transactions",
+            params={"where": f"Date >= DateTime({from_date})"}
+        )
+        return json.dumps(serialize_list(response.bank_transactions), indent=2)
+    except Exception as e:
+        return f"Error retrieving recent transactions: {str(e)}"
+
+# Add a default resource for 30 days
+@mcp.resource("xero://transactions/recent")
+def get_default_recent_transactions() -> str:
+    """Get recent transactions for the last 30 days"""
+    try:
+        from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        response = xero_call_endpoint(
+            "get_bank_transactions",
+            params={"where": f"Date >= DateTime({from_date})"}
+        )
+        return json.dumps(serialize_list(response.bank_transactions), indent=2)
+    except Exception as e:
+        return f"Error retrieving recent transactions: {str(e)}"
+
+# Financial Analysis Prompts
 @mcp.prompt()
-def analyze_cash_flow(from_date: str, to_date: str) -> str:
-    """Create a prompt for analyzing cash flow.
+def analyze_financial_health() -> str:
+    """Comprehensive analysis of organization's financial health"""
+    return """I'll help analyze your organization's financial health by examining:
 
-    Args:
-        from_date: Start date in YYYY-MM-DD format
-        to_date: End date in YYYY-MM-DD format
-    """
-    return f"""Please analyze the cash flow situation from {from_date} to {to_date}.
-Focus on:
-1. Operating cash flow trends
-2. Major cash inflows and outflows
-3. Working capital management
-4. Cash flow forecasting
-5. Recommendations for improving cash position
-
-Consider:
-- Bank account balances and movements
-- Accounts receivable aging
-- Accounts payable commitments
-- Upcoming payment obligations"""
-
-
-@mcp.prompt()
-def review_financial_health() -> str:
-    """Create a prompt for reviewing overall financial health"""
-    return """Please analyze the organization's overall financial health.
-Focus on:
 1. Profitability Analysis
    - Gross profit margins
    - Operating margins
@@ -983,76 +1068,100 @@ Focus on:
    - Credit risk
    - Operating leverage
 
-Please provide:
-- Key strengths and weaknesses
-- Comparison to industry benchmarks (if available)
-- Specific recommendations for improvement
-- Areas requiring immediate attention"""
+I'll provide:
+✓ Key strengths and weaknesses
+✓ Industry benchmark comparisons
+✓ Specific improvement recommendations
+✓ Priority action items"""
 
+@mcp.prompt()
+def analyze_cash_flow(from_date: str, to_date: str) -> str:
+    """Detailed cash flow analysis with forecasting"""
+    return f"""I'll analyze your cash flow situation from {from_date} to {to_date}, focusing on:
+
+1. Cash Flow Patterns
+   - Operating cash flow trends
+   - Major inflows and outflows
+   - Seasonal patterns
+
+2. Working Capital Analysis
+   - Receivables management
+   - Payables timing
+   - Inventory efficiency
+
+3. Forecasting & Planning
+   - 30/60/90 day projections
+   - Upcoming obligations
+   - Potential cash gaps
+
+4. Optimization Opportunities
+   - Collection strategies
+   - Payment timing
+   - Working capital improvements
+
+I'll provide actionable recommendations to improve your cash position."""
 
 @mcp.prompt()
 def analyze_aged_receivables(contact_id: str = None) -> str:
-    """Create a prompt for analyzing aged receivables.
+    """Detailed analysis of aged receivables with action plan"""
+    base_prompt = """I'll analyze your accounts receivable to help optimize collections:
 
-    Args:
-        contact_id: Optional specific contact to analyze
-    """
-    base_prompt = """Please analyze the aged receivables report.
-Focus on:
-1. Overall Collection Health
+1. Collection Health
    - Total outstanding receivables
-   - Age distribution of receivables
+   - Aging breakdown
    - Collection efficiency metrics
 
-2. Risk Assessment
-   - Identify high-risk accounts
-   - Analyze payment patterns
-   - Flag potential bad debts
+2. Risk Analysis
+   - High-risk accounts identified
+   - Payment pattern analysis
+   - Potential bad debt exposure
 
-3. Action Items
-   - Prioritized collection targets
-   - Recommended follow-up actions
-   - Suggested policy changes
+3. Action Plan
+   - Priority collection targets
+   - Recommended follow-up steps
+   - Policy improvement suggestions
 
-4. Trends and Patterns
+4. Performance Tracking
    - Historical collection trends
    - Seasonal patterns
    - Customer payment behaviors"""
 
     if contact_id:
-        return (
-            base_prompt + f"\n\nPlease focus specifically on contact ID: {contact_id}"
-        )
+        return base_prompt + f"\n\nI'll focus specifically on customer ID: {contact_id}"
     return base_prompt
-
 
 @mcp.prompt()
 def budget_variance_analysis(date: str) -> str:
-    """Create a prompt for analyzing budget variances.
+    """Comprehensive budget variance analysis with recommendations"""
+    return f"""I'll analyze your budget performance as of {date}, examining:
 
-    Args:
-        date: Report date in YYYY-MM-DD format
-    """
-    return f"""Please analyze the budget variances as of {date}.
-Focus on:
-1. Significant Variances
-   - Major favorable and unfavorable variances
-   - Root cause analysis of variances
-   - Impact on overall financial performance
+1. Variance Analysis
+   - Key favorable/unfavorable variances
+   - Root cause identification
+   - Impact assessment
 
-2. Trend Analysis
-   - Recurring variance patterns
-   - Seasonal factors
-   - Progressive changes over time
-
-3. Performance Assessment
-   - Department/category performance
+2. Performance Tracking
+   - Department/category analysis
    - Cost control effectiveness
    - Revenue target achievement
 
-4. Recommendations
+3. Trend Identification
+   - Recurring patterns
+   - Seasonal factors
+   - Progressive changes
+
+4. Strategic Planning
    - Budget adjustment needs
-   - Control improvement opportunities
+   - Control improvements
    - Strategic implications
 
-Please provide actionable insights and specific recommendations for addressing variances."""
+I'll provide specific recommendations to address variances and improve budget performance."""
+
+@mcp.tool(description="Tool to retrieve organization information from Xero")
+def xero_get_organization() -> str:
+    """Get information about the authenticated Xero organization"""
+    try:
+        response = xero_call_endpoint("get_organisations")
+        return json.dumps(serialize_list(response.organisations), indent=2)
+    except Exception as e:
+        return f"Error retrieving organization information: {str(e)}"

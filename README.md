@@ -1,206 +1,124 @@
-# Xero MCP
+# Xero MCP Integration
 
-A Model Context Protocol server that provides access to Xero's accounting API. This server enables LLMs to interact with Xero's financial data, reports, and accounting resources.
+A powerful integration that connects Claude with your Xero accounting data, enabling intelligent financial analysis and insights.
 
-## Installation and Setup
+## Features
 
-1. Install Claude Desktop from the official website
+### 1. Financial Dashboard
+- Quick access to financial overview
+- Real-time bank balances
+- Key performance metrics
+- Executive summaries
 
-2. Install UV and uvx:
+### 2. Financial Reports
+- Balance Sheet analysis
+- Profit & Loss statements
+- Cash flow tracking
+- Budget variance analysis
+
+### 3. Account Management
+- Chart of accounts access
+- Receivables monitoring
+- Payables tracking
+- Account reconciliation
+
+### 4. Transaction Analysis
+- Recent transaction review
+- Bank transaction history
+- Payment tracking
+- Invoice management
+
+## Getting Started
+
+1. Set up your Xero credentials:
+   - Create a `.env` file in the root directory
+   - Add your Xero API credentials:
+     ```
+     XERO_CLIENT_ID=your_client_id
+     XERO_CLIENT_SECRET=your_client_secret
+     ```
+
+2. Install dependencies:
    ```bash
-   # Install UV following the official guide
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-
-   # Install uvx using UV
-   uv pip install uvx
+   pip install -r requirements.txt
    ```
 
-3. Find your `uvx` path by running:
+3. Run the integration:
    ```bash
-   which uvx
+   python -m xero_mcp.app
    ```
-   This will output something like:
-   - Unix/macOS: `/Users/<username>/.local/bin/uvx`
-   - Windows: Run `where uvx` instead
 
-4. Get Xero API Credentials:
-   - Go to [Xero Developer Portal](https://developer.xero.com)
-   - Create a new app
-   - Set redirect URI to: `http://localhost:8000/callback`
-   - Copy Client ID and Client Secret
+## Using the Integration
 
-5. Configure Claude Desktop:
-   - Open your `claude_desktop_config.json`
-   - Add the following to the "mcpServers" section, replacing the `command` value with your `uvx` path from step 3:
+### Available Resources
 
-```json
-{
-  "mcpServers": {
-    "Xero App": {
-      "command": "YOUR_UVX_PATH_HERE",
-      "args": [
-        "xero-mcp"
-      ],
-      "env": {
-        "XERO_CLIENT_ID": "your_client_id",
-        "XERO_CLIENT_SECRET": "your_client_secret"
-      }
-    }
-  }
-}
-```
+Access financial data through organized resource paths:
 
-For example, if `which uvx` returned `/Users/username/.local/bin/uvx`, your config would look like:
-```json
-{
-  "mcpServers": {
-    "Xero App": {
-      "command": "/Users/username/.local/bin/uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/semicolonio/xero-mcp.git",
-        "xero-mcp"
-      ],
-      "env": {
-        "XERO_CLIENT_ID": "your_client_id",
-        "XERO_CLIENT_SECRET": "your_client_secret"
-      }
-    }
-  }
-}
-```
+- `xero://dashboard/overview` - Comprehensive financial overview
+- `xero://reports/balance_sheet` - Balance sheet reports
+- `xero://reports/profit_and_loss` - P&L statements
+- `xero://accounts/chart` - Chart of accounts
+- `xero://accounts/receivables` - Receivables summary
+- `xero://accounts/payables` - Payables summary
+- `xero://transactions/recent` - Recent transactions
 
-Note: Replace `your_client_id` and `your_client_secret` with your Xero API credentials
+### Financial Analysis Prompts
 
-## Authentication
+Use these prompts for intelligent financial analysis:
 
-The server handles OAuth2 authentication automatically:
-1. On first use, it opens your browser
-2. Log in to your Xero account
-3. Grant requested permissions
-4. Tokens are securely stored and auto-refreshed
+1. **Financial Health Analysis**
+   - Comprehensive financial health assessment
+   - Key metrics and ratios
+   - Industry benchmarks
+   - Actionable recommendations
 
-## Components
+2. **Cash Flow Analysis**
+   - Cash flow patterns
+   - Working capital management
+   - Forecasting and planning
+   - Optimization strategies
 
-### Tools
+3. **Receivables Management**
+   - Collection health metrics
+   - Risk analysis
+   - Action plans
+   - Performance tracking
 
-#### Financial Reports
-- `xero_get_balance_sheet`
-  - Retrieve balance sheet report with assets, liabilities, and equity
-  - Input: `date` (string): Report date in YYYY-MM-DD format
-  - Optional: `periods`, `timeframe`, `tracking_options`
-
-- `xero_get_profit_and_loss`
-  - Retrieve profit and loss statement
-  - Input: `from_date`, `to_date` (string): Date range in YYYY-MM-DD format
-  - Optional: `periods`, `timeframe`, `tracking_categories`
-
-- `xero_get_bank_summary`
-  - Get bank account balances and movements
-  - Optional: `from_date`, `to_date` for specific period
-
-#### Data Access
-- `xero_get_accounts`
-  - List all accounts in the chart of accounts
-  - Optional: `where` filter condition
-
-- `xero_get_contacts`
-  - Retrieve customer and supplier contacts
-  - Optional: `where`, `page`, `search_term`, `include_archived`
-
-- `xero_get_bank_transactions`
-  - View bank transactions
-  - Optional: `where`, `order`, `page`, `modified_after`
-
-- `xero_get_invoices`
-  - Access invoice data
-  - Optional: Multiple filter options including `where`, `order`, `page`, `statuses`
-
-#### Aging Reports
-- `xero_get_aged_payables_by_contact`
-  - View aged payables for a specific contact
-  - Input: `contact_id` (string)
-  - Optional: `date`, `from_date`, `to_date`
-
-- `xero_get_aged_receivables_by_contact`
-  - View aged receivables for a specific contact
-  - Input: `contact_id` (string)
-  - Optional: `date`, `from_date`, `to_date`
-
-## Usage with Claude Desktop
-
-To use this server with Claude Desktop, add the following configuration to the "mcpServers" section of your `claude_desktop_config.json`:
-
-### Using uvx (Recommended)
-
-```json
-{
-  "mcpServers": {
-    "Xero App": {
-      "command": "/Users/nasir/.cargo/bin/uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/semicolonio/xero-mcp.git",
-        "xero-mcp"
-      ],
-      "env": {
-        "XERO_CLIENT_ID": "your_client_id",
-        "XERO_CLIENT_SECRET": "your_client_secret"
-      }
-    }
-  }
-}
-```
-
-Notes:
-- Replace `your_client_id` and `your_client_secret` with your Xero API credentials
-- The server requires OAuth2 authentication on first use
-
-## Prerequisites
-
-1. Install uvx:
-```bash
-cargo install uvx
-```
-
-2. Get Xero API Credentials:
-- Go to [Xero Developer Portal](https://developer.xero.com)
-- Create a new app
-- Set redirect URI to: `http://localhost:8000/callback`
-- Copy Client ID and Client Secret
+4. **Budget Analysis**
+   - Variance analysis
+   - Performance tracking
+   - Trend identification
+   - Strategic planning
 
 ## Example Usage
 
-```python
-# Get all bank accounts
-accounts = await xero_get_accounts(where='Type=="BANK"')
+Ask Claude questions like:
 
-# Get balance sheet for specific date
-balance_sheet = await xero_get_balance_sheet(date="2024-01-31")
+- "How is our overall financial health looking?"
+- "Analyze our cash flow for the last 3 months"
+- "Review our aged receivables and suggest collection strategies"
+- "Compare our budget performance against actuals"
+- "What are our key financial metrics trending towards?"
 
-# Get recent bank transactions
-transactions = await xero_get_bank_transactions(
-    where='Type=="SPEND"',
-    order="Date DESC",
-    page=1
-)
-```
+## Security
 
-## Data Storage
+This integration:
+- Uses secure OAuth2 authentication
+- Stores credentials securely
+- Implements token refresh
+- Maintains secure connections
 
-The server maintains a local SQLite database (`config/xero_analytics.db`) for:
-- Token management
-- Sync statistics
-- Cache optimization
+## Support
 
-## Error Handling
+For issues or questions:
+1. Check the documentation
+2. Review the troubleshooting guide
+3. Submit an issue on GitHub
 
-Built-in handling for common issues:
-- API rate limits
-- Network connectivity
-- Authentication failures
-- Invalid parameters
+## Future Enhancements
 
-## License
-
-This project is licensed under the MIT License.
+Planned features:
+- Additional financial analysis tools
+- Custom report generation
+- Advanced forecasting capabilities
+- Integration with other financial services
