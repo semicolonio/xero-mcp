@@ -1,6 +1,5 @@
 from contextlib import contextmanager
 import sqlite3
-from venv import logger
 from fastmcp import FastMCP, Context
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -23,7 +22,9 @@ from xero_python.api_client.configuration import Configuration
 from xero_python.api_client.oauth2 import OAuth2Token
 from xero_python.api_client.serializer import serialize_list
 from authlib.integrations.requests_client import OAuth2Session
+import logging
 
+logger = logging.getLogger(__name__)
 # Constants for OAuth2
 AUTHORIZATION_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
@@ -34,6 +35,7 @@ if os.getenv("CONFIG_DIR"):
 else:
     CONFIG_DIR = Path(__file__).parent / "config"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
 
 load_dotenv()
 
@@ -429,6 +431,32 @@ def xero_get_auth_status(ctx: Context) -> str:
     if expires_in < 0:
         return "Token expired"
     return f"Authenticated (token expires in {int(expires_in)} seconds)"
+
+
+@mcp.tool(description="Tool to force reauthentication with Xero, regardless of current auth status")
+def xero_reauthenticate(ctx: Context) -> str:
+    """Force a new authentication flow with Xero"""
+    ctx.info("Starting Xero reauthentication flow")
+    
+    # Initialize Xero client
+    xero = XeroClient()
+    
+    # Clear existing token if present
+    if xero.token_path.exists():
+        xero.token_path.unlink()
+        xero._token = None
+    
+    try:
+        with xero.auth_server.setup_server() as server:
+            # Open browser with actual port
+            auth_url = xero.auth_server.get_auth_url(server.current_port)
+            webbrowser.open(auth_url)
+            
+            # Wait for callback
+            server.wait_until_auth_complete()
+            return "Reauthentication completed successfully"
+    except Exception as e:
+        return f"Reauthentication failed: {str(e)}"
 
 
 def xero_call_endpoint(endpoint: str, params: dict | None = None):
