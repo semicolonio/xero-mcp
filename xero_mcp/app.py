@@ -1221,10 +1221,10 @@ def budget_variance_analysis(date: str) -> str:
 I'll provide specific recommendations to address variances and improve budget performance."""
 
 @mcp.tool(description="Tool to retrieve organization information from Xero")
-def xero_get_organization() -> str:
+def xero_get_organization(tenant_id: str) -> str:
     """Get information about the authenticated Xero organization"""
     try:
-        response = xero_call_endpoint("get_organisations")
+        response = xero_call_endpoint("get_organisations", tenant_id)
         return json.dumps(serialize_list(response.organisations), indent=2)
     except Exception as e:
         return f"Error retrieving organization information: {str(e)}"
