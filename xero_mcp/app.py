@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 import sqlite3
-from fastmcp import FastMCP, Context
+from mcp.server.fastmcp import FastMCP, Context
 from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
@@ -459,13 +459,14 @@ def xero_reauthenticate(ctx: Context) -> str:
         return f"Reauthentication failed: {str(e)}"
 
 
-def xero_call_endpoint(endpoint: str, params: dict | None = None):
+def xero_call_endpoint(endpoint: str, tenant_id: str | None = None, params: dict | None = None):
     """Call a specific Xero API endpoint"""
     xero = XeroClient()
     xero.refresh_if_needed()
     api_client = xero.ensure_client()
     accounting_api = AccountingApi(api_client)
-    tenant_id = xero.get_tenant_id()
+    if tenant_id is None:
+        tenant_id = xero.get_tenant_id()
     params = params or {}
     func = getattr(accounting_api, endpoint)
     if not func:
@@ -476,16 +477,40 @@ def xero_call_endpoint(endpoint: str, params: dict | None = None):
     return response
 
 
+@mcp.tool(
+    description="""Tool to retrieve all connections for the authenticated user.
+    Returns connection details including:
+    - id: Unique identifier for the connection
+    - tenantId: A unique identifier for the tenant/organization
+    - authEventId: Identifier for the authentication event
+    - tenantType: Whether the tenant is an ORGANISATION or other type
+    - tenantName: The name of the organization
+    - createdDateUtc: When the connection was created
+    - updatedDateUtc: When the connection was last updated
+    
+    This tool is useful for finding the tenant ID needed for other API calls when working with multiple Xero organizations."""
+)
+def xero_get_connections() -> str:
+    """Get all connections for the authenticated user"""
+    xero = XeroClient()
+    xero.refresh_if_needed()
+    api_client = xero.ensure_client()
+    identity_api = IdentityApi(api_client)
+    connections = identity_api.get_connections()
+    return json.dumps(serialize_list(connections), indent=2)
+
+
 @mcp.tool(description="Tool to retrieve accounts from Xero")
-def xero_get_accounts(where: str = None) -> str:
+def xero_get_accounts(tenant_id: str, where: str = None) -> str:
     """Get all accounts from Xero"""
     params = {"where": where} if where else None
-    response = xero_call_endpoint("get_accounts", params=params)
+    response = xero_call_endpoint("get_accounts", tenant_id, params=params)
     return json.dumps(serialize_list(response.accounts), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve contacts from Xero")
 def xero_get_contacts(
+    tenant_id: str,
     where: str = None,
     page: int = None,
     search_term: str = None,
@@ -507,11 +532,12 @@ def xero_get_contacts(
     if summary_only:
         params["summary_only"] = summary_only
 
-    return xero_call_endpoint("get_contacts", params=params)
+    return xero_call_endpoint("get_contacts", tenant_id, params=params)
 
 
 @mcp.tool(description="Tool to retrieve a Balance Sheet report from Xero")
 def xero_get_balance_sheet(
+    tenant_id: str,
     date: str,
     periods: int = None,
     timeframe: str = None,
@@ -535,12 +561,13 @@ def xero_get_balance_sheet(
     if tracking_option_id_2:
         params["tracking_option_id_2"] = tracking_option_id_2
 
-    response = xero_call_endpoint("get_report_balance_sheet", params=params)
+    response = xero_call_endpoint("get_report_balance_sheet", tenant_id, params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve a Profit and Loss report from Xero")
 def xero_get_profit_and_loss(
+    tenant_id: str,
     from_date: str,
     to_date: str,
     periods: int = None,
@@ -572,12 +599,13 @@ def xero_get_profit_and_loss(
     if tracking_option_id_2:
         params["tracking_option_id_2"] = tracking_option_id_2
 
-    response = xero_call_endpoint("get_report_profit_and_loss", params=params)
+    response = xero_call_endpoint("get_report_profit_and_loss", tenant_id, params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve an Aged Payables by Contact report from Xero")
 def xero_get_aged_payables_by_contact(
+    tenant_id: str,
     contact_id: str,
     date: str = None,
     from_date: str = None,
@@ -592,12 +620,13 @@ def xero_get_aged_payables_by_contact(
     if to_date:
         params["to_date"] = to_date
 
-    response = xero_call_endpoint("get_report_aged_payables_by_contact", params=params)
+    response = xero_call_endpoint("get_report_aged_payables_by_contact", tenant_id, params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve an Aged Receivables by Contact report from Xero")
 def xero_get_aged_receivables_by_contact(
+    tenant_id: str,
     contact_id: str,
     date: str = None,
     from_date: str = None,
@@ -612,12 +641,13 @@ def xero_get_aged_receivables_by_contact(
     if to_date:
         params["to_date"] = to_date
 
-    response = xero_call_endpoint("get_report_aged_receivables_by_contact", params=params)
+    response = xero_call_endpoint("get_report_aged_receivables_by_contact", tenant_id, params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve a Bank Summary report from Xero")
 def xero_get_bank_summary(
+    tenant_id: str,
     from_date: str = None,
     to_date: str = None,
 ) -> str:
@@ -628,12 +658,13 @@ def xero_get_bank_summary(
     if to_date:
         params["to_date"] = to_date
 
-    response = xero_call_endpoint("get_report_bank_summary", params=params)
+    response = xero_call_endpoint("get_report_bank_summary", tenant_id, params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve a Budget Summary report from Xero")
 def xero_get_budget_summary(
+    tenant_id: str,
     date: str = None,
     periods: int = None,
     timeframe: int = None,
@@ -647,12 +678,13 @@ def xero_get_budget_summary(
     if timeframe:
         params["timeframe"] = timeframe
 
-    response = xero_call_endpoint("get_report_budget_summary", params=params)
+    response = xero_call_endpoint("get_report_budget_summary", tenant_id, params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve an Executive Summary report from Xero")
 def xero_get_executive_summary(
+    tenant_id: str,
     date: str = None,
 ) -> str:
     params = {}
@@ -660,12 +692,13 @@ def xero_get_executive_summary(
     if date:
         params["date"] = date
 
-    response = xero_call_endpoint("get_report_executive_summary", params=params)
+    response = xero_call_endpoint("get_report_executive_summary", tenant_id, params=params)
     return json.dumps(serialize_list(response.reports), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve bank transactions from Xero")
 def xero_get_bank_transactions(
+    tenant_id: str,
     where: str = None,
     order: str = None,
     page: int = None,
@@ -682,12 +715,13 @@ def xero_get_bank_transactions(
     if modified_after:
         params["modified_after"] = modified_after
 
-    response = xero_call_endpoint("get_bank_transactions", params=params)
+    response = xero_call_endpoint("get_bank_transactions", tenant_id, params=params)
     return json.dumps(serialize_list(response.bank_transactions), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve payments from Xero")
 def xero_get_payments(
+    tenant_id: str,
     where: str = None,
     order: str = None,
     page: int = None,
@@ -704,12 +738,13 @@ def xero_get_payments(
     if modified_after:
         params["modified_after"] = modified_after
 
-    response = xero_call_endpoint("get_payments", params=params)
+    response = xero_call_endpoint("get_payments", tenant_id, params=params)
     return json.dumps(serialize_list(response.payments), indent=2)
 
 
 @mcp.tool(description="Tool to retrieve invoices from Xero")
 def xero_get_invoices(
+    tenant_id: str,
     where: str = None,
     order: str = None,
     page: int = None,
@@ -741,7 +776,7 @@ def xero_get_invoices(
     if summary_only:
         params["summary_only"] = summary_only
 
-    response = xero_call_endpoint("get_invoices", params=params)
+    response = xero_call_endpoint("get_invoices", tenant_id, params=params)
     return json.dumps(serialize_list(response.invoices), indent=2)
 
 
